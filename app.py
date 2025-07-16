@@ -9,9 +9,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from moshi.loaders import CheckpointInfo  # Correct loader import
-from moshi.codec import Mimi  # Correct Mimi codec import
-from moshi.models import LMModel  # Correct LM model import
+from huggingface_hub import hf_hub_download
+from moshi.models import loaders, LMGen  # Correct imports from moshi.models
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +25,7 @@ templates = Jinja2Templates(directory="templates")
 
 # Global variables for models
 mimi = None
-lm = None
+lm_gen = None
 
 # Emotion and speaking style configurations
 EMOTIONS = {
@@ -49,19 +48,23 @@ EMOTIONS = {
 
 async def initialize_models():
     """Initialize Moshi models using official loaders"""
-    global mimi, lm
+    global mimi, lm_gen
     
     try:
         logger.info("Loading Moshi models...")
         
-        # Load checkpoint info from Hugging Face repo
-        checkpoint_info = CheckpointInfo.from_hf_repo("kyutai/moshika-pytorch-bf16")
+        # Download weights from Hugging Face
+        mimi_weight = hf_hub_download(loaders.DEFAULT_REPO, loaders.MIMI_NAME)
+        moshi_weight = hf_hub_download(loaders.DEFAULT_REPO, loaders.MOSHI_NAME)
         
         # Load Mimi codec
-        mimi = Mimi.from_pretrained(checkpoint_info.mimi_checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        mimi = loaders.get_mimi(mimi_weight, device=device)
+        mimi.set_num_codebooks(8)  # Optimized for Moshi
         
-        # Load LM model
-        lm = LMModel.from_pretrained(checkpoint_info.lm_checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
+        # Load Moshi LM model
+        moshi_lm = loaders.get_moshi_lm(moshi_weight, device=device)
+        lm_gen = LMGen(moshi_lm, temp=0.8, temp_text=0.7)  # Sampling parameters
         
         logger.info("Models loaded successfully!")
         
@@ -105,12 +108,15 @@ class VoiceAssistant:
             # Convert audio bytes to tensor
             audio_tensor = torch.frombuffer(audio_data, dtype=torch.float32).to(mimi.device)
             
-            # Encode audio with Mimi (STT-like processing)
-            encoded = mimi.encode(audio_tensor.unsqueeze(0))
+            # Encode audio with Mimi
+            with torch.no_grad():
+                codes = mimi.encode(audio_tensor.unsqueeze(0))
             
-            # Generate transcription/text from encoded audio
-            transcription_tokens = lm.generate(encoded, max_length=100)  # Adjust max_length as needed
-            transcription = " ".join([str(token) for token in transcription_tokens])  # Simplified token-to-text
+            # Generate transcription/response using LMGen
+            with torch.no_grad(), lm_gen.streaming(1):
+                tokens_out = lm_gen.step(codes)
+                if tokens_out is not None:
+                    transcription = " ".join(map(str, tokens_out[:, 1].tolist()))  # Simplified token-to-text
             
             # Check for emotion commands
             if transcription.lower().startswith("speak with"):
@@ -126,16 +132,12 @@ class VoiceAssistant:
                 else:
                     response_text = "I understand you want me to change my speaking style. Available emotions include: happy, sad, excited, calm, whispering, singing, dramatic, and more!"
             else:
-                # Generate response using LM
-                response_tokens = lm.generate(transcription_tokens, max_length=100)
-                response_text = " ".join([str(token) for token in response_tokens])
-                
-                # Apply emotional context
-                response_text = self.apply_emotion_to_text(response_text)
+                # Generate response
+                response_text = self.apply_emotion_to_text(transcription)  # Apply emotion to generated text
             
-            # Synthesize audio output (TTS-like) with Mimi decode
-            response_encoded = lm.generate(response_text)  # Encode response text
-            audio_output = mimi.decode(response_encoded)
+            # Decode to audio output
+            with torch.no_grad():
+                audio_output = mimi.decode(tokens_out[:, 1:])
             
             return {
                 "user_text": transcription,
