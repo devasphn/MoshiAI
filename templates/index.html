@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MoshiAI Voice Assistant</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>MoshiAI Voice Assistant</h1>
+        
+        <div class="controls">
+            <button id="startCall" class="btn btn-primary">Start Call</button>
+            <button id="endCall" class="btn btn-danger" disabled>End Call</button>
+            <button id="muteBtn" class="btn btn-secondary" disabled>Mute</button>
+        </div>
+        
+        <div class="emotion-controls">
+            <h3>Current Emotion: <span id="currentEmotion">happy</span></h3>
+            <div class="emotion-buttons">
+                <button class="emotion-btn" data-emotion="happy">Happy</button>
+                <button class="emotion-btn" data-emotion="sad">Sad</button>
+                <button class="emotion-btn" data-emotion="excited">Excited</button>
+                <button class="emotion-btn" data-emotion="calm">Calm</button>
+                <button class="emotion-btn" data-emotion="whispering">Whispering</button>
+                <button class="emotion-btn" data-emotion="singing">Singing</button>
+                <button class="emotion-btn" data-emotion="dramatic">Dramatic</button>
+                <button class="emotion-btn" data-emotion="giggling">Giggling</button>
+            </div>
+        </div>
+        
+        <div class="transcription">
+            <h3>Conversation</h3>
+            <div class="transcript-container">
+                <div id="userTranscript" class="transcript user">
+                    <strong>You:</strong> <span class="text"></span>
+                </div>
+                <div id="aiTranscript" class="transcript ai">
+                    <strong>AI:</strong> <span class="text"></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="status">
+            <div id="connectionStatus" class="status-indicator">Disconnected</div>
+        </div>
+    </div>
+    
+    <script src="/static/script.js"></script>
+</body>
+</html>
