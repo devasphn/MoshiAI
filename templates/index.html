@@ -3,14 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MoshiAI Voice Assistant</title>
+    <title>Enhanced Unmute Voice Assistant</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🎙️ MoshiAI Voice Assistant</h1>
-            <p>Real-time voice conversations with AI</p>
+            <h1>🎙️ Enhanced Unmute Voice Assistant</h1>
+            <p>Advanced STT → LLM → TTS with Emotion Support & Indian Female Voice</p>
+            <div class="version-info">v2.0.0</div>
         </header>
 
         <main>
@@ -22,6 +23,10 @@
                 <div class="status-item">
                     <span class="status-label">Emotion:</span>
                     <span id="current-emotion" class="status-value">neutral</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Response Time:</span>
+                    <span id="response-time" class="status-value">-</span>
                 </div>
             </div>
 
@@ -50,15 +55,40 @@
                         <option value="nervous">Nervous</option>
                     </select>
                 </div>
+
+                <div class="advanced-controls">
+                    <button id="clear-btn" class="btn btn-info">🗑️ Clear Chat</button>
+                    <button id="stats-btn" class="btn btn-info">📊 Statistics</button>
+                </div>
             </div>
 
             <div class="audio-visualizer">
                 <canvas id="audio-canvas" width="800" height="100"></canvas>
+                <div class="visualizer-info">
+                    <span>Audio Visualization</span>
+                    <span id="audio-level">Level: 0%</span>
+                </div>
+            </div>
+
+            <div class="performance-panel">
+                <div class="performance-item">
+                    <span class="performance-label">Turn Count:</span>
+                    <span id="turn-count" class="performance-value">0</span>
+                </div>
+                <div class="performance-item">
+                    <span class="performance-label">Total Requests:</span>
+                    <span id="total-requests" class="performance-value">0</span>
+                </div>
+                <div class="performance-item">
+                    <span class="performance-label">Success Rate:</span>
+                    <span id="success-rate" class="performance-value">100%</span>
+                </div>
             </div>
         </main>
 
         <footer>
-            <p>Powered by Kyutai STT & TTS Models</p>
+            <p>Powered by Enhanced Kyutai STT, LLM & TTS Models with Emotion Support</p>
+            <p>🇮🇳 Features Indian Female Voice | Real-time Processing | Advanced VAD</p>
         </footer>
     </div>
 
