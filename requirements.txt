@@ -1,19 +1,23 @@
-torch>=2.6.0
-torchaudio>=2.6.0
-transformers>=4.46.0
-fastapi==0.104.1
-uvicorn==0.24.0
-websockets==12.0
-python-multipart==0.0.6
-aiofiles==23.2.1
-jinja2==3.1.2
-huggingface-hub>=0.24.0
-soundfile>=0.12.1
-numpy>=1.24.0,<2.0.0
-pydantic>=2.0.0
-accelerate>=0.33.0
-safetensors>=0.4.0
-einops>=0.7.0
-sentencepiece>=0.1.99
-scipy>=1.9.0
+# Core Moshi package
+moshi==0.2.10
+
+# Unmute.sh specific dependencies
+torch>=2.0.0
+torchaudio>=2.0.0
+transformers>=4.30.0
+fastapi>=0.100.0
+uvicorn>=0.20.0
+websockets>=11.0
+numpy>=1.24.0
+soundfile>=0.12.0
+huggingface-hub>=0.16.0
+
+# Audio processing
 librosa>=0.10.0
+scipy>=1.9.0
+resampy>=0.4.0
+
+# Additional dependencies for Kyutai models
+sentencepiece>=0.1.99
+safetensors>=0.3.0
+accelerate>=0.20.0
