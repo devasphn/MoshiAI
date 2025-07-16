@@ -1,187 +1,332 @@
-class VoiceAssistant {
+class MoshiVoiceAssistant {
     constructor() {
         this.ws = null;
-        this.isConnected = false;
-        this.isMuted = false;
+        this.isRecording = false;
         this.mediaRecorder = null;
         this.audioContext = null;
-        this.currentEmotion = 'happy';
-
-        this.initializeElements();
+        this.analyzer = null;
+        this.canvas = null;
+        this.canvasCtx = null;
+        this.audioChunks = [];
+        this.currentEmotion = 'neutral';
+        
+        this.init();
+    }
+    
+    init() {
+        this.setupWebSocket();
         this.setupEventListeners();
+        this.setupAudioVisualization();
+        this.checkStatus();
     }
-
-    initializeElements() {
-        this.startBtn = document.getElementById('startCall');
-        this.endBtn = document.getElementById('endCall');
-        this.muteBtn = document.getElementById('muteBtn');
-        this.statusEl = document.getElementById('connectionStatus');
-        this.currentEmotionEl = document.getElementById('currentEmotion');
-        this.userTranscriptEl = document.getElementById('userTranscript');
-        this.aiTranscriptEl = document.getElementById('aiTranscript');
-        this.emotionBtns = document.querySelectorAll('.emotion-btn');
+    
+    setupWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        
+        this.ws = new WebSocket(wsUrl);
+        
+        this.ws.onopen = () => {
+            console.log('WebSocket connected');
+            this.updateConnectionStatus('Connected', 'connected');
+        };
+        
+        this.ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            this.handleWebSocketMessage(data);
+        };
+        
+        this.ws.onclose = () => {
+            console.log('WebSocket disconnected');
+            this.updateConnectionStatus('Disconnected', 'disconnected');
+            // Attempt to reconnect after 3 seconds
+            setTimeout(() => this.setupWebSocket(), 3000);
+        };
+        
+        this.ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            this.updateConnectionStatus('Error', 'error');
+        };
     }
-
+    
     setupEventListeners() {
-        this.startBtn.addEventListener('click', () => this.startCall());
-        this.endBtn.addEventListener('click', () => this.endCall());
-        this.muteBtn.addEventListener('click', () => this.toggleMute());
-
-        this.emotionBtns.forEach(btn => {
-            btn.addEventListener('click', () => {
-                const emotion = btn.dataset.emotion;
-                this.setEmotion(emotion);
-            });
+        // Voice control buttons
+        document.getElementById('start-btn').addEventListener('click', () => {
+            this.startRecording();
+        });
+        
+        document.getElementById('stop-btn').addEventListener('click', () => {
+            this.stopRecording();
+        });
+        
+        // Emotion selector
+        document.getElementById('emotion-select').addEventListener('change', (e) => {
+            this.setEmotion(e.target.value);
         });
     }
-
-    async startCall() {
+    
+    setupAudioVisualization() {
+        this.canvas = document.getElementById('audio-canvas');
+        this.canvasCtx = this.canvas.getContext('2d');
+        
+        // Set canvas size
+        this.canvas.width = 800;
+        this.canvas.height = 100;
+        
+        this.drawVisualization();
+    }
+    
+    async startRecording() {
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            this.ws = new WebSocket(`ws://${window.location.host}/ws`);
-            this.ws.binaryType = "arraybuffer";
-
-            this.ws.onopen = () => {
-                this.isConnected = true;
-                this.updateStatus('Connected');
-                this.startBtn.disabled = true;
-                this.endBtn.disabled = false;
-                this.muteBtn.disabled = false;
-            };
-
-            this.ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                this.handleResponse(data);
-            };
-
-            this.ws.onclose = () => {
-                this.isConnected = false;
-                this.updateStatus('Disconnected');
-                this.startBtn.disabled = false;
-                this.endBtn.disabled = true;
-                this.muteBtn.disabled = true;
-            };
-
-            this.mediaRecorder = new MediaRecorder(stream);
-            this.mediaRecorder.ondataavailable = (event) => {
-                if (event.data.size > 0 && this.isConnected && !this.isMuted) {
-                    this.sendAudioData(event.data);
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    sampleRate: 16000,
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true
                 }
-            };
-            this.mediaRecorder.start(100);
-        } catch (error) {
-            console.error('Error starting call:', error);
-            alert('Could not access microphone. Please check permissions.');
-        }
-    }
-
-    endCall() {
-        if (this.ws) {
-            this.ws.close();
-        }
-        if (this.mediaRecorder) {
-            this.mediaRecorder.stop();
-        }
-        this.isConnected = false;
-        this.updateStatus('Disconnected');
-        this.startBtn.disabled = false;
-        this.endBtn.disabled = true;
-        this.muteBtn.disabled = true;
-    }
-
-    toggleMute() {
-        this.isMuted = !this.isMuted;
-        this.muteBtn.textContent = this.isMuted ? 'Unmute' : 'Mute';
-        this.muteBtn.style.background = this.isMuted ? '#ff9800' : '#2196F3';
-    }
-
-    async sendAudioData(audioBlob) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            const arrayBuffer = await audioBlob.arrayBuffer();
-            this.ws.send(arrayBuffer);
-        }
-    }
-
-    handleResponse(data) {
-        if (data.type === 'response') {
-            const { user_text, ai_text, audio, emotion } = data.data;
-            if (user_text) {
-                this.userTranscriptEl.querySelector('.text').textContent = user_text;
-            }
-            if (ai_text) {
-                this.aiTranscriptEl.querySelector('.text').textContent = ai_text;
-            }
-            if (emotion) {
-                this.currentEmotion = emotion;
-                this.currentEmotionEl.textContent = emotion;
-                this.updateEmotionButtons();
-            }
-            if (audio && audio.length > 0) {
-                this.playAudioResponse(audio);
-            }
-        }
-    }
-
-    playAudioResponse(audioDataB64) {
-        // Handles base64 encoded audio. If sending bytes, adjust accordingly.
-        try {
-            const byteCharacters = atob(audioDataB64);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const audioBlob = new Blob([byteArray], { type: 'audio/wav' });
-            const url = URL.createObjectURL(audioBlob);
-            const audio = new Audio(url);
-            audio.play();
-        } catch (e) {
-            // If not base64, treat as binary
-            const audioBlob = new Blob([audioDataB64], { type: 'audio/wav' });
-            const url = URL.createObjectURL(audioBlob);
-            const audio = new Audio(url);
-            audio.play();
-        }
-    }
-
-    async setEmotion(emotion) {
-        try {
-            const response = await fetch('/set_emotion', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ emotion })
             });
-            if (response.ok) {
-                this.currentEmotion = emotion;
-                this.currentEmotionEl.textContent = emotion;
-                this.updateEmotionButtons();
+            
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.analyzer = this.audioContext.createAnalyser();
+            this.analyzer.fftSize = 2048;
+            
+            const source = this.audioContext.createMediaStreamSource(stream);
+            source.connect(this.analyzer);
+            
+            this.mediaRecorder = new MediaRecorder(stream);
+            this.audioChunks = [];
+            
+            this.mediaRecorder.ondataavailable = (event) => {
+                this.audioChunks.push(event.data);
+            };
+            
+            this.mediaRecorder.onstop = () => {
+                this.processAudioChunks();
+            };
+            
+            this.mediaRecorder.start();
+            this.isRecording = true;
+            
+            // Update UI
+            document.getElementById('start-btn').disabled = true;
+            document.getElementById('stop-btn').disabled = false;
+            document.getElementById('start-btn').classList.add('recording');
+            
+            this.startVisualization();
+            
+        } catch (error) {
+            console.error('Error starting recording:', error);
+            this.showError('Could not access microphone. Please check permissions.');
+        }
+    }
+    
+    stopRecording() {
+        if (this.mediaRecorder && this.isRecording) {
+            this.mediaRecorder.stop();
+            this.isRecording = false;
+            
+            // Update UI
+            document.getElementById('start-btn').disabled = false;
+            document.getElementById('stop-btn').disabled = true;
+            document.getElementById('start-btn').classList.remove('recording');
+            
+            // Stop audio tracks
+            this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
+            
+            this.stopVisualization();
+        }
+    }
+    
+    async processAudioChunks() {
+        if (this.audioChunks.length === 0) return;
+        
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+        const arrayBuffer = await audioBlob.arrayBuffer();
+        const audioData = await this.audioContext.decodeAudioData(arrayBuffer);
+        
+        // Convert to float32 array
+        const audioArray = audioData.getChannelData(0);
+        
+        // Send to server
+        this.sendAudioData(Array.from(audioArray));
+    }
+    
+    sendAudioData(audioArray) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            const message = {
+                type: 'audio',
+                audio: audioArray
+            };
+            
+            this.ws.send(JSON.stringify(message));
+        }
+    }
+    
+    setEmotion(emotion) {
+        this.currentEmotion = emotion;
+        
+        // Update UI
+        document.getElementById('current-emotion').textContent = emotion;
+        
+        // Send to server
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            const message = {
+                type: 'emotion',
+                emotion: emotion
+            };
+            
+            this.ws.send(JSON.stringify(message));
+        }
+    }
+    
+    handleWebSocketMessage(data) {
+        switch (data.type) {
+            case 'transcription':
+                this.addMessage(data.text, 'user');
+                break;
+                
+            case 'response':
+                this.addMessage(data.text, 'assistant');
+                if (data.audio && data.audio.length > 0) {
+                    this.playAudio(data.audio);
+                }
+                break;
+                
+            case 'emotion_updated':
+                document.getElementById('current-emotion').textContent = data.emotion;
+                break;
+                
+            default:
+                console.log('Unknown message type:', data.type);
+        }
+    }
+    
+    addMessage(text, sender) {
+        const conversation = document.getElementById('conversation');
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${sender}`;
+        
+        const contentDiv = document.createElement('div');
+        contentDiv.className = 'message-content';
+        contentDiv.textContent = text;
+        
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'message-time';
+        timeDiv.textContent = new Date().toLocaleTimeString();
+        
+        messageDiv.appendChild(contentDiv);
+        messageDiv.appendChild(timeDiv);
+        conversation.appendChild(messageDiv);
+        
+        // Scroll to bottom
+        conversation.scrollTop = conversation.scrollHeight;
+    }
+    
+    async playAudio(audioArray) {
+        try {
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            const audioBuffer = this.audioContext.createBuffer(1, audioArray.length, 16000);
+            const channelData = audioBuffer.getChannelData(0);
+            
+            for (let i = 0; i < audioArray.length; i++) {
+                channelData[i] = audioArray[i];
+            }
+            
+            const source = this.audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(this.audioContext.destination);
+            source.start();
+            
+        } catch (error) {
+            console.error('Error playing audio:', error);
+        }
+    }
+    
+    startVisualization() {
+        this.isVisualizing = true;
+        this.visualize();
+    }
+    
+    stopVisualization() {
+        this.isVisualizing = false;
+        this.drawVisualization();
+    }
+    
+    visualize() {
+        if (!this.isVisualizing) return;
+        
+        requestAnimationFrame(() => this.visualize());
+        
+        if (this.analyzer) {
+            const bufferLength = this.analyzer.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            this.analyzer.getByteFrequencyData(dataArray);
+            
+            this.drawVisualization(dataArray);
+        }
+    }
+    
+    drawVisualization(dataArray = null) {
+        const width = this.canvas.width;
+        const height = this.canvas.height;
+        
+        this.canvasCtx.clearRect(0, 0, width, height);
+        
+        if (dataArray) {
+            // Draw frequency bars
+            this.canvasCtx.fillStyle = '#007bff';
+            
+            const barWidth = width / dataArray.length * 2;
+            let x = 0;
+            
+            for (let i = 0; i < dataArray.length; i++) {
+                const barHeight = (dataArray[i] / 255) * height;
+                
+                this.canvasCtx.fillRect(x, height - barHeight, barWidth, barHeight);
+                x += barWidth + 1;
+            }
+        } else {
+            // Draw placeholder
+            this.canvasCtx.fillStyle = '#e9ecef';
+            this.canvasCtx.fillRect(0, height / 2 - 1, width, 2);
+            
+            this.canvasCtx.fillStyle = '#6c757d';
+            this.canvasCtx.font = '16px Arial';
+            this.canvasCtx.textAlign = 'center';
+            this.canvasCtx.fillText('Audio Visualization', width / 2, height / 2 - 10);
+        }
+    }
+    
+    updateConnectionStatus(status, className) {
+        const statusElement = document.getElementById('connection-status');
+        statusElement.textContent = status;
+        statusElement.className = `status-value ${className}`;
+    }
+    
+    async checkStatus() {
+        try {
+            const response = await fetch('/status');
+            const data = await response.json();
+            
+            if (data.status === 'running') {
+                this.updateConnectionStatus('Ready', 'connected');
             }
         } catch (error) {
-            console.error('Error setting emotion:', error);
+            console.error('Error checking status:', error);
+            this.updateConnectionStatus('Error', 'error');
         }
     }
-
-    updateEmotionButtons() {
-        this.emotionBtns.forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.emotion === this.currentEmotion);
-        });
-    }
-
-    updateStatus(status) {
-        this.statusEl.textContent = status;
-        if (status === 'Connected') {
-            this.statusEl.classList.remove('disconnected');
-            this.statusEl.classList.add('connected');
-        } else {
-            this.statusEl.classList.remove('connected');
-            this.statusEl.classList.add('disconnected');
-        }
+    
+    showError(message) {
+        this.addMessage(`Error: ${message}`, 'system');
     }
 }
 
+// Initialize the application when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
-    new VoiceAssistant();
+    new MoshiVoiceAssistant();
 });
