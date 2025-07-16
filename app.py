@@ -535,7 +535,7 @@ class TextLLM:
                     ai_response = ai_response.split("Human:")[0].strip()
                 
                 # Clean up common artifacts
-                ai_response = ai_response.replace("```
+                ai_response = ai_response.replace("``````", "")
                 
                 # Remove repetitive patterns
                 lines = ai_response.split('\n')
@@ -750,7 +750,7 @@ class KyutaiTTS:
             
             # Generate enhanced harmonics
             audio = np.zeros_like(t)
-            harmonics = 
+            harmonics = [1, 2, 3, 4, 5, 6, 7, 8]
             amplitudes = [0.5, 0.3, 0.2, 0.15, 0.1, 0.08, 0.06, 0.04]
             
             for harmonic, amplitude in zip(harmonics, amplitudes):
@@ -768,7 +768,7 @@ class KyutaiTTS:
                 audio += emotional_amp * np.sin(phase)
             
             # Enhanced formant simulation for Indian female voice
-            formants = [1200][2800][4200]  # Adjusted for Indian female voice
+            formants = [700, 1200, 2800, 4200]  # Adjusted for Indian female voice
             formant_amplitudes = [0.12, 0.10, 0.08, 0.05]
             
             for formant_freq, formant_amp in zip(formants, formant_amplitudes):
