@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import torch
-import torchaudio
 import numpy as np
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse
@@ -30,7 +29,6 @@ moshi_model = None
 lm_gen = None
 stt_model = None
 tts_model = None
-voice_embeddings = {}
 
 # Emotion and speaking style configurations
 EMOTIONS = {
@@ -53,7 +51,7 @@ EMOTIONS = {
 
 async def initialize_models():
     """Initialize Moshi models"""
-    global moshi_model, lm_gen, stt_model, tts_model, voice_embeddings
+    global moshi_model, lm_gen, stt_model, tts_model
     
     try:
         logger.info("Loading Moshi models...")
@@ -68,11 +66,6 @@ async def initialize_models():
         
         # Load TTS model
         tts_model = loaders.get_tts_model("kyutai/tts-1.6b-en_fr")
-        
-        # Load custom voice if available
-        if os.path.exists("voices/indian_female.wav"):
-            voice_sample, sr = torchaudio.load("voices/indian_female.wav")
-            voice_embeddings["indian_female"] = tts_model.compute_voice_embedding(voice_sample)
         
         logger.info("Models loaded successfully!")
         
@@ -94,21 +87,22 @@ class VoiceAssistant:
         return False
     
     def apply_emotion_to_text(self, text: str) -> str:
-        """Apply emotional context to text"""
-        if self.current_emotion == "whispering":
-            return f"*whispers* {text}"
-        elif self.current_emotion == "singing":
-            return f"♪ {text} ♪"
-        elif self.current_emotion == "dramatic":
-            return f"*dramatically* {text}"
-        elif self.current_emotion == "giggling":
-            return f"*giggles* {text}"
-        elif self.current_emotion == "sad":
-            return f"*sighs* {text}"
-        elif self.current_emotion == "excited":
-            return f"*excitedly* {text}!"
-        else:
-            return text
+        """Apply emotional context to text sparingly for natural flow"""
+        # Apply emotion only if it fits naturally (e.g., not every sentence)
+        if np.random.random() < 0.3:  # 30% chance to add emotional tag for better timing
+            if self.current_emotion == "whispering":
+                return f"*whispers* {text}"
+            elif self.current_emotion == "singing":
+                return f"♪ {text} ♪"
+            elif self.current_emotion == "dramatic":
+                return f"*dramatically* {text}"
+            elif self.current_emotion == "giggling":
+                return f"*giggles* {text}"
+            elif self.current_emotion == "sad":
+                return f"*sighs* {text}"
+            elif self.current_emotion == "excited":
+                return f"*excitedly* {text}!"
+        return text
     
     async def process_speech(self, audio_data: bytes) -> dict:
         """Process incoming speech and generate response"""
@@ -139,11 +133,9 @@ class VoiceAssistant:
                 # Apply emotional context
                 response_text = self.apply_emotion_to_text(response_text)
             
-            # Text-to-speech with emotion
-            voice_embedding = voice_embeddings.get("indian_female", None)
+            # Text-to-speech with emotion (using default voice)
             audio_output = tts_model.synthesize(
                 response_text, 
-                voice_embedding=voice_embedding,
                 emotion=self.current_emotion
             )
             
