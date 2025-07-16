@@ -5,50 +5,63 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MoshiAI Voice Assistant</title>
     <link rel="stylesheet" href="/static/style.css">
-    <!-- Favicon to fix 404 error (add a favicon.ico file to static/ or use a URL) -->
-    <link rel="icon" href="/static/favicon.ico" type="image/x-icon">
 </head>
 <body>
     <div class="container">
-        <h1>MoshiAI Voice Assistant</h1>
-        
-        <div class="controls">
-            <button id="startCall" class="btn btn-primary" aria-label="Start the call">Start Call</button>
-            <button id="endCall" class="btn btn-danger" disabled aria-label="End the call">End Call</button>
-            <button id="muteBtn" class="btn btn-secondary" disabled aria-label="Mute or unmute">Mute</button>
-        </div>
-        
-        <div class="emotion-controls">
-            <h3>Current Emotion: <span id="currentEmotion">happy</span></h3>
-            <div class="emotion-buttons">
-                <button class="emotion-btn" data-emotion="happy" aria-label="Set happy emotion">Happy</button>
-                <button class="emotion-btn" data-emotion="sad" aria-label="Set sad emotion">Sad</button>
-                <button class="emotion-btn" data-emotion="excited" aria-label="Set excited emotion">Excited</button>
-                <button class="emotion-btn" data-emotion="calm" aria-label="Set calm emotion">Calm</button>
-                <button class="emotion-btn" data-emotion="whispering" aria-label="Set whispering emotion">Whispering</button>
-                <button class="emotion-btn" data-emotion="singing" aria-label="Set singing emotion">Singing</button>
-                <button class="emotion-btn" data-emotion="dramatic" aria-label="Set dramatic emotion">Dramatic</button>
-                <button class="emotion-btn" data-emotion="giggling" aria-label="Set giggling emotion">Giggling</button>
-            </div>
-        </div>
-        
-        <div class="transcription">
-            <h3>Conversation</h3>
-            <div class="transcript-container">
-                <div id="userTranscript" class="transcript user">
-                    <strong>You:</strong> <span class="text"></span>
+        <header>
+            <h1>🎙️ MoshiAI Voice Assistant</h1>
+            <p>Real-time voice conversations with AI</p>
+        </header>
+
+        <main>
+            <div class="status-panel">
+                <div class="status-item">
+                    <span class="status-label">Status:</span>
+                    <span id="connection-status" class="status-value">Connecting...</span>
                 </div>
-                <div id="aiTranscript" class="transcript ai">
-                    <strong>AI:</strong> <span class="text"></span>
+                <div class="status-item">
+                    <span class="status-label">Emotion:</span>
+                    <span id="current-emotion" class="status-value">neutral</span>
                 </div>
             </div>
-        </div>
-        
-        <div class="status">
-            <div id="connectionStatus" class="status-indicator">Disconnected</div>
-        </div>
+
+            <div class="chat-container">
+                <div id="conversation" class="conversation"></div>
+            </div>
+
+            <div class="controls">
+                <div class="voice-controls">
+                    <button id="start-btn" class="btn btn-primary">🎤 Start Talking</button>
+                    <button id="stop-btn" class="btn btn-secondary" disabled>⏹️ Stop</button>
+                </div>
+
+                <div class="emotion-controls">
+                    <label for="emotion-select">Voice Emotion:</label>
+                    <select id="emotion-select">
+                        <option value="neutral">Neutral</option>
+                        <option value="happy">Happy</option>
+                        <option value="sad">Sad</option>
+                        <option value="excited">Excited</option>
+                        <option value="calm">Calm</option>
+                        <option value="angry">Angry</option>
+                        <option value="whisper">Whisper</option>
+                        <option value="dramatic">Dramatic</option>
+                        <option value="confident">Confident</option>
+                        <option value="nervous">Nervous</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="audio-visualizer">
+                <canvas id="audio-canvas" width="800" height="100"></canvas>
+            </div>
+        </main>
+
+        <footer>
+            <p>Powered by Kyutai STT & TTS Models</p>
+        </footer>
     </div>
-    
-    <script src="/static/script.js" type="text/javascript"></script>
+
+    <script src="/static/script.js"></script>
 </body>
 </html>
