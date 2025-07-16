@@ -1,4 +1,4 @@
-class UnmuteVoiceAssistant {
+class EnhancedUnmuteVoiceAssistant {
     constructor() {
         this.ws = null;
         this.isRecording = false;
@@ -6,6 +6,12 @@ class UnmuteVoiceAssistant {
         this.audioContext = null;
         this.analyzer = null;
         this.audioChunks = [];
+        this.currentEmotion = 'neutral';
+        this.performanceMetrics = {
+            totalRequests: 0,
+            successfulRequests: 0,
+            turnCount: 0
+        };
         
         this.init();
     }
@@ -13,6 +19,7 @@ class UnmuteVoiceAssistant {
     init() {
         this.setupWebSocket();
         this.setupEventListeners();
+        this.setupAudioVisualization();
         this.checkStatus();
     }
     
@@ -20,28 +27,28 @@ class UnmuteVoiceAssistant {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
         
-        console.log('🔌 Connecting to WebSocket:', wsUrl);
+        console.log('🔌 Connecting to Enhanced WebSocket:', wsUrl);
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
-            console.log('✅ WebSocket connected');
+            console.log('✅ Enhanced WebSocket connected');
             this.updateStatus('Connected', 'connected');
         };
         
         this.ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            console.log('📨 Received message:', data.type);
+            console.log('📨 Received enhanced message:', data.type);
             this.handleMessage(data);
         };
         
         this.ws.onclose = () => {
-            console.log('🔌 WebSocket disconnected');
+            console.log('🔌 Enhanced WebSocket disconnected');
             this.updateStatus('Disconnected', 'disconnected');
             setTimeout(() => this.setupWebSocket(), 3000);
         };
         
         this.ws.onerror = (error) => {
-            console.error('❌ WebSocket error:', error);
+            console.error('❌ Enhanced WebSocket error:', error);
             this.updateStatus('Error', 'error');
         };
     }
@@ -54,32 +61,61 @@ class UnmuteVoiceAssistant {
         document.getElementById('stop-btn').addEventListener('click', () => {
             this.stopRecording();
         });
+        
+        document.getElementById('emotion-select').addEventListener('change', (e) => {
+            this.setEmotion(e.target.value);
+        });
+        
+        document.getElementById('clear-btn').addEventListener('click', () => {
+            this.clearChat();
+        });
+        
+        document.getElementById('stats-btn').addEventListener('click', () => {
+            this.showStatistics();
+        });
+    }
+    
+    setupAudioVisualization() {
+        this.canvas = document.getElementById('audio-canvas');
+        this.canvasCtx = this.canvas.getContext('2d');
+        
+        this.canvas.width = 800;
+        this.canvas.height = 100;
+        
+        this.drawVisualization();
     }
     
     async startRecording() {
         try {
-            console.log('🎤 Starting recording...');
+            console.log('🎤 Starting enhanced recording...');
             
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
                     sampleRate: 16000,
                     channelCount: 1,
                     echoCancellation: true,
-                    noiseSuppression: true
+                    noiseSuppression: true,
+                    autoGainControl: true
                 }
             });
             
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.analyzer = this.audioContext.createAnalyser();
+            this.analyzer.fftSize = 2048;
+            
+            const source = this.audioContext.createMediaStreamSource(stream);
+            source.connect(this.analyzer);
+            
             this.mediaRecorder = new MediaRecorder(stream);
             this.audioChunks = [];
             
             this.mediaRecorder.ondataavailable = (event) => {
-                console.log('📊 Audio data available:', event.data.size, 'bytes');
+                console.log('📊 Enhanced audio data available:', event.data.size, 'bytes');
                 this.audioChunks.push(event.data);
             };
             
             this.mediaRecorder.onstop = () => {
-                console.log('🛑 Recording stopped, processing audio...');
+                console.log('🛑 Enhanced recording stopped, processing audio...');
                 this.processAudio();
             };
             
@@ -89,188 +125,21 @@ class UnmuteVoiceAssistant {
             // Update UI
             document.getElementById('start-btn').disabled = true;
             document.getElementById('stop-btn').disabled = false;
+            document.getElementById('start-btn').classList.add('recording');
             
-            console.log('✅ Recording started successfully');
+            this.startVisualization();
+            
+            console.log('✅ Enhanced recording started successfully');
             
         } catch (error) {
-            console.error('❌ Recording error:', error);
-            this.showError('Could not access microphone');
+            console.error('❌ Enhanced recording error:', error);
+            this.showError('Could not access microphone. Please check permissions.');
         }
     }
     
     stopRecording() {
         if (this.mediaRecorder && this.isRecording) {
-            console.log('⏹️ Stopping recording...');
+            console.log('⏹️ Stopping enhanced recording...');
             
             this.mediaRecorder.stop();
-            this.isRecording = false;
-            
-            // Update UI
-            document.getElementById('start-btn').disabled = false;
-            document.getElementById('stop-btn').disabled = true;
-            
-            // Stop audio tracks
-            this.mediaRecorder.stream.getTracks().forEach(track => track.stop());
-        }
-    }
-    
-    async processAudio() {
-        try {
-            console.log('🔄 Processing audio chunks...');
-            
-            if (this.audioChunks.length === 0) {
-                console.warn('⚠️ No audio chunks to process');
-                return;
-            }
-            
-            const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
-            console.log('📦 Audio blob size:', audioBlob.size, 'bytes');
-            
-            const arrayBuffer = await audioBlob.arrayBuffer();
-            const audioData = await this.audioContext.decodeAudioData(arrayBuffer);
-            
-            // Convert to float32 array
-            const audioArray = audioData.getChannelData(0);
-            console.log('📊 Audio array length:', audioArray.length, 'samples');
-            
-            // Send to server
-            this.sendAudioData(Array.from(audioArray));
-            
-        } catch (error) {
-            console.error('❌ Audio processing error:', error);
-            this.showError('Failed to process audio');
-        }
-    }
-    
-    sendAudioData(audioArray) {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            console.log('📤 Sending audio data to server...');
-            
-            const message = {
-                type: 'audio',
-                audio: audioArray
-            };
-            
-            this.ws.send(JSON.stringify(message));
-            console.log('✅ Audio data sent successfully');
-        } else {
-            console.error('❌ WebSocket not ready');
-        }
-    }
-    
-    handleMessage(data) {
-        console.log('📨 Handling message:', data.type);
-        
-        switch (data.type) {
-            case 'transcription':
-                console.log('🎤 Transcription:', data.text);
-                this.addMessage(data.text, 'user');
-                break;
-                
-            case 'response':
-                console.log('🤖 AI Response:', data.text);
-                this.addMessage(data.text, 'assistant');
-                if (data.audio && data.audio.length > 0) {
-                    this.playAudio(data.audio);
-                }
-                break;
-                
-            case 'error':
-                console.error('❌ Server error:', data.message);
-                this.showError(data.message);
-                break;
-                
-            case 'pong':
-                console.log('🏓 Pong received');
-                break;
-                
-            default:
-                console.warn('⚠️ Unknown message type:', data.type);
-        }
-    }
-    
-    addMessage(text, sender) {
-        const conversation = document.getElementById('conversation');
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${sender}`;
-        
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'message-content';
-        contentDiv.textContent = text;
-        
-        const timeDiv = document.createElement('div');
-        timeDiv.className = 'message-time';
-        timeDiv.textContent = new Date().toLocaleTimeString();
-        
-        messageDiv.appendChild(contentDiv);
-        messageDiv.appendChild(timeDiv);
-        conversation.appendChild(messageDiv);
-        
-        // Scroll to bottom
-        conversation.scrollTop = conversation.scrollHeight;
-        
-        console.log('💬 Message added:', sender, text);
-    }
-    
-    async playAudio(audioArray) {
-        try {
-            console.log('🔊 Playing audio response...');
-            
-            if (!this.audioContext) {
-                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            
-            const audioBuffer = this.audioContext.createBuffer(1, audioArray.length, 24000);
-            const channelData = audioBuffer.getChannelData(0);
-            
-            for (let i = 0; i < audioArray.length; i++) {
-                channelData[i] = audioArray[i];
-            }
-            
-            const source = this.audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(this.audioContext.destination);
-            source.start();
-            
-            console.log('✅ Audio playback started');
-            
-        } catch (error) {
-            console.error('❌ Audio playback error:', error);
-        }
-    }
-    
-    updateStatus(status, className) {
-        const statusElement = document.getElementById('connection-status');
-        statusElement.textContent = status;
-        statusElement.className = `status-value ${className}`;
-        
-        console.log('📊 Status updated:', status);
-    }
-    
-    async checkStatus() {
-        try {
-            const response = await fetch('/status');
-            const data = await response.json();
-            
-            console.log('📊 System status:', data);
-            
-            if (data.status === 'running') {
-                this.updateStatus('Ready', 'connected');
-            }
-        } catch (error) {
-            console.error('❌ Status check error:', error);
-            this.updateStatus('Error', 'error');
-        }
-    }
-    
-    showError(message) {
-        console.error('❌ Error:', message);
-        this.addMessage(`Error: ${message}`, 'system');
-    }
-}
-
-// Initialize when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 Initializing Unmute Voice Assistant...');
-    new UnmuteVoiceAssistant();
-});
+            this.isRec
