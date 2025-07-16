@@ -3,16 +3,26 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enhanced Unmute Voice Assistant</title>
+    <title>Official Unmute Voice Assistant - RunPod</title>
     <link rel="stylesheet" href="/static/style.css">
+    <meta http-equiv="Permissions-Policy" content="microphone=()">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🎙️ Enhanced Unmute Voice Assistant</h1>
-            <p>Advanced STT → LLM → TTS with Emotion Support & Indian Female Voice</p>
-            <div class="version-info">v2.0.0</div>
+            <h1>🎙️ Official Unmute Voice Assistant</h1>
+            <p>Kyutai STT → Moshi LLM → Kyutai TTS with Indian Female Voice</p>
+            <div class="version-info">v1.0.0 | RunPod Platform</div>
         </header>
+
+        <div class="platform-notice">
+            <h3>⚠️ Important Notice for RunPod Users</h3>
+            <p>RunPod provides HTTP-only access. For microphone functionality, you have two options:</p>
+            <ul>
+                <li><strong>Option 1:</strong> Use a secure tunneling service (recommended)</li>
+                <li><strong>Option 2:</strong> Test with text input below</li>
+            </ul>
+        </div>
 
         <main>
             <div class="status-panel">
@@ -21,8 +31,8 @@
                     <span id="connection-status" class="status-value">Connecting...</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Emotion:</span>
-                    <span id="current-emotion" class="status-value">neutral</span>
+                    <span class="status-label">Platform:</span>
+                    <span class="status-value">RunPod</span>
                 </div>
                 <div class="status-item">
                     <span class="status-label">Response Time:</span>
@@ -40,25 +50,14 @@
                     <button id="stop-btn" class="btn btn-secondary" disabled>⏹️ Stop</button>
                 </div>
 
-                <div class="emotion-controls">
-                    <label for="emotion-select">Voice Emotion:</label>
-                    <select id="emotion-select">
-                        <option value="neutral">Neutral</option>
-                        <option value="happy">Happy</option>
-                        <option value="sad">Sad</option>
-                        <option value="excited">Excited</option>
-                        <option value="calm">Calm</option>
-                        <option value="angry">Angry</option>
-                        <option value="whisper">Whisper</option>
-                        <option value="dramatic">Dramatic</option>
-                        <option value="confident">Confident</option>
-                        <option value="nervous">Nervous</option>
-                    </select>
+                <div class="text-controls">
+                    <input type="text" id="text-input" placeholder="Type your message here..." class="text-input">
+                    <button id="send-text-btn" class="btn btn-success">📝 Send Text</button>
                 </div>
 
                 <div class="advanced-controls">
                     <button id="clear-btn" class="btn btn-info">🗑️ Clear Chat</button>
-                    <button id="stats-btn" class="btn btn-info">📊 Statistics</button>
+                    <button id="test-tts-btn" class="btn btn-warning">🔊 Test TTS</button>
                 </div>
             </div>
 
@@ -87,8 +86,8 @@
         </main>
 
         <footer>
-            <p>Powered by Enhanced Kyutai STT, LLM & TTS Models with Emotion Support</p>
-            <p>🇮🇳 Features Indian Female Voice | Real-time Processing | Advanced VAD</p>
+            <p>Official Kyutai STT, Moshi LLM & Kyutai TTS Models</p>
+            <p>🇮🇳 Indian Female Voice | RunPod Platform | Official Unmute.sh Architecture</p>
         </footer>
     </div>
 
