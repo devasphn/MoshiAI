@@ -6,11 +6,11 @@ class VoiceAssistant {
         this.mediaRecorder = null;
         this.audioContext = null;
         this.currentEmotion = 'happy';
-        
+
         this.initializeElements();
         this.setupEventListeners();
     }
-    
+
     initializeElements() {
         this.startBtn = document.getElementById('startCall');
         this.endBtn = document.getElementById('endCall');
@@ -21,12 +21,12 @@ class VoiceAssistant {
         this.aiTranscriptEl = document.getElementById('aiTranscript');
         this.emotionBtns = document.querySelectorAll('.emotion-btn');
     }
-    
+
     setupEventListeners() {
         this.startBtn.addEventListener('click', () => this.startCall());
         this.endBtn.addEventListener('click', () => this.endCall());
         this.muteBtn.addEventListener('click', () => this.toggleMute());
-        
+
         this.emotionBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const emotion = btn.dataset.emotion;
@@ -34,14 +34,15 @@ class VoiceAssistant {
             });
         });
     }
-    
+
     async startCall() {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            
+
             this.ws = new WebSocket(`ws://${window.location.host}/ws`);
-            
+            this.ws.binaryType = "arraybuffer";
+
             this.ws.onopen = () => {
                 this.isConnected = true;
                 this.updateStatus('Connected');
@@ -49,12 +50,12 @@ class VoiceAssistant {
                 this.endBtn.disabled = false;
                 this.muteBtn.disabled = false;
             };
-            
+
             this.ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
                 this.handleResponse(data);
             };
-            
+
             this.ws.onclose = () => {
                 this.isConnected = false;
                 this.updateStatus('Disconnected');
@@ -62,7 +63,7 @@ class VoiceAssistant {
                 this.endBtn.disabled = true;
                 this.muteBtn.disabled = true;
             };
-            
+
             this.mediaRecorder = new MediaRecorder(stream);
 
             this.mediaRecorder.ondataavailable = (event) => {
@@ -70,15 +71,15 @@ class VoiceAssistant {
                     this.sendAudioData(event.data);
                 }
             };
-            
+
             this.mediaRecorder.start(100); // Send data every 100ms
-            
+
         } catch (error) {
             console.error('Error starting call:', error);
             alert('Could not access microphone. Please check permissions.');
         }
     }
-    
+
     endCall() {
         if (this.ws) {
             this.ws.close();
@@ -92,20 +93,20 @@ class VoiceAssistant {
         this.endBtn.disabled = true;
         this.muteBtn.disabled = true;
     }
-    
+
     toggleMute() {
         this.isMuted = !this.isMuted;
         this.muteBtn.textContent = this.isMuted ? 'Unmute' : 'Mute';
         this.muteBtn.style.background = this.isMuted ? '#ff9800' : '#2196F3';
     }
-    
+
     async sendAudioData(audioBlob) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             const arrayBuffer = await audioBlob.arrayBuffer();
             this.ws.send(arrayBuffer);
         }
     }
-    
+
     handleResponse(data) {
         if (data.type === 'response') {
             const { user_text, ai_text, audio, emotion } = data.data;
@@ -128,18 +129,32 @@ class VoiceAssistant {
             }
         }
     }
-    
+
     playAudioResponse(audioDataB64) {
-        // If you send audio as base64 (recommend), decode accordingly.
-        // If sent as bytes (from backend), treat as array buffer.
-        // We'll assume bytes here (since backend sends .tobytes())
-        const byteArray = Uint8Array.from(atob(btoa(audioDataB64)), c => c.charCodeAt(0));
-        const audioBlob = new Blob([byteArray], { type: 'audio/wav' });
-        const url = URL.createObjectURL(audioBlob);
-        const audio = new Audio(url);
-        audio.play();
+        // If backend sends raw bytes as base64 string (recommended), decode it.
+        // If backend sends bytes, you may need to convert it to Uint8Array or Blob.
+        try {
+            // Attempt to decode as base64 (if base64 is used)
+            // If you send raw binary, use as is with Blob.
+            const byteCharacters = atob(audioDataB64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const audioBlob = new Blob([byteArray], { type: 'audio/wav' });
+            const url = URL.createObjectURL(audioBlob);
+            const audio = new Audio(url);
+            audio.play();
+        } catch (error) {
+            // If it's not base64, fallback to raw binary
+            const audioBlob = new Blob([audioDataB64], { type: 'audio/wav' });
+            const url = URL.createObjectURL(audioBlob);
+            const audio = new Audio(url);
+            audio.play();
+        }
     }
-    
+
     async setEmotion(emotion) {
         try {
             const response = await fetch('/set_emotion', {
@@ -158,13 +173,13 @@ class VoiceAssistant {
             console.error('Error setting emotion:', error);
         }
     }
-    
+
     updateEmotionButtons() {
         this.emotionBtns.forEach(btn => {
             btn.classList.toggle('active', btn.dataset.emotion === this.currentEmotion);
         });
     }
-    
+
     updateStatus(status) {
         this.statusEl.textContent = status;
         if (status === 'Connected') {
