@@ -187,7 +187,7 @@ class KyutaiTTSService:
             tokenizer_path = os.path.join(model_path, "tokenizer_spm_8k_en_fr_audio.model")
             if os.path.exists(tokenizer_path):
                 import sentencepiece as spm
-                self.tokenizer = smp.SentencePieceProcessor()
+                self.tokenizer = spm.SentencePieceProcessor()
                 self.tokenizer.load(tokenizer_path)
                 logger.info("TTS tokenizer loaded successfully")
             
