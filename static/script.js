@@ -13,6 +13,7 @@ class EnhancedUnmuteVoiceAssistant {
             turnCount: 0
         };
         this.isVisualizing = false;
+        this.microphonePermission = false;
         
         this.init();
     }
@@ -21,19 +22,55 @@ class EnhancedUnmuteVoiceAssistant {
         this.setupWebSocket();
         this.setupEventListeners();
         this.setupAudioVisualization();
+        this.requestMicrophonePermission();
         this.checkStatus();
     }
     
+    async requestMicrophonePermission() {
+        try {
+            console.log('🎤 Requesting microphone permission...');
+            
+            // Request microphone permission immediately for HTTPS
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    sampleRate: 16000,
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true
+                }
+            });
+            
+            // Stop the stream immediately, we just needed permission
+            stream.getTracks().forEach(track => track.stop());
+            
+            this.microphonePermission = true;
+            console.log('✅ Microphone permission granted');
+            
+            // Update UI to show we're ready
+            this.updateStatus('Ready', 'connected');
+            
+        } catch (error) {
+            console.error('❌ Microphone permission denied:', error);
+            this.microphonePermission = false;
+            this.updateStatus('Microphone Access Denied', 'error');
+            this.showError('Microphone access is required. Please allow microphone access and refresh the page.');
+        }
+    }
+    
     setupWebSocket() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        // Handle RunPod proxy URL properly
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
         
         console.log('🔌 Connecting to Enhanced WebSocket:', wsUrl);
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
             console.log('✅ Enhanced WebSocket connected');
-            this.updateStatus('Connected', 'connected');
+            if (this.microphonePermission) {
+                this.updateStatus('Connected', 'connected');
+            }
         };
         
         this.ws.onmessage = (event) => {
@@ -45,21 +82,29 @@ class EnhancedUnmuteVoiceAssistant {
         this.ws.onclose = () => {
             console.log('🔌 Enhanced WebSocket disconnected');
             this.updateStatus('Disconnected', 'disconnected');
+            // Reconnect after 3 seconds
             setTimeout(() => this.setupWebSocket(), 3000);
         };
         
         this.ws.onerror = (error) => {
             console.error('❌ Enhanced WebSocket error:', error);
-            this.updateStatus('Error', 'error');
+            this.updateStatus('Connection Error', 'error');
         };
     }
     
     setupEventListeners() {
-        document.getElementById('start-btn').addEventListener('click', () => {
+        const startBtn = document.getElementById('start-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        
+        startBtn.addEventListener('click', () => {
+            if (!this.microphonePermission) {
+                this.showError('Microphone permission required. Please refresh and allow access.');
+                return;
+            }
             this.startRecording();
         });
         
-        document.getElementById('stop-btn').addEventListener('click', () => {
+        stopBtn.addEventListener('click', () => {
             this.stopRecording();
         });
         
@@ -84,8 +129,12 @@ class EnhancedUnmuteVoiceAssistant {
     
     setupAudioVisualization() {
         this.canvas = document.getElementById('audio-canvas');
-        this.canvasCtx = this.canvas.getContext('2d');
+        if (!this.canvas) {
+            console.error('❌ Audio canvas not found');
+            return;
+        }
         
+        this.canvasCtx = this.canvas.getContext('2d');
         this.canvas.width = 800;
         this.canvas.height = 100;
         
@@ -93,8 +142,25 @@ class EnhancedUnmuteVoiceAssistant {
     }
     
     async startRecording() {
+        if (!this.microphonePermission) {
+            this.showError('Microphone permission required');
+            return;
+        }
+        
         try {
             console.log('🎤 Starting enhanced recording...');
+            
+            // Initialize audio context for HTTPS
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 16000
+                });
+            }
+            
+            // Resume audio context if suspended (required for HTTPS)
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
             
             const stream = await navigator.mediaDevices.getUserMedia({ 
                 audio: {
@@ -106,19 +172,28 @@ class EnhancedUnmuteVoiceAssistant {
                 }
             });
             
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            // Setup analyzer
             this.analyzer = this.audioContext.createAnalyser();
             this.analyzer.fftSize = 2048;
+            this.analyzer.minDecibels = -90;
+            this.analyzer.maxDecibels = -10;
+            this.analyzer.smoothingTimeConstant = 0.85;
             
             const source = this.audioContext.createMediaStreamSource(stream);
             source.connect(this.analyzer);
             
-            this.mediaRecorder = new MediaRecorder(stream);
+            // Setup media recorder
+            this.mediaRecorder = new MediaRecorder(stream, {
+                mimeType: 'audio/webm;codecs=opus'
+            });
+            
             this.audioChunks = [];
             
             this.mediaRecorder.ondataavailable = (event) => {
-                console.log('📊 Enhanced audio data available:', event.data.size, 'bytes');
-                this.audioChunks.push(event.data);
+                if (event.data.size > 0) {
+                    console.log('📊 Enhanced audio data available:', event.data.size, 'bytes');
+                    this.audioChunks.push(event.data);
+                }
             };
             
             this.mediaRecorder.onstop = () => {
@@ -126,7 +201,13 @@ class EnhancedUnmuteVoiceAssistant {
                 this.processAudio();
             };
             
-            this.mediaRecorder.start();
+            this.mediaRecorder.onerror = (event) => {
+                console.error('❌ MediaRecorder error:', event.error);
+                this.showError('Recording error: ' + event.error);
+            };
+            
+            // Start recording
+            this.mediaRecorder.start(1000); // Collect data every 1 second
             this.isRecording = true;
             
             // Update UI
@@ -140,7 +221,7 @@ class EnhancedUnmuteVoiceAssistant {
             
         } catch (error) {
             console.error('❌ Enhanced recording error:', error);
-            this.showError('Could not access microphone. Please check permissions.');
+            this.showError('Could not start recording: ' + error.message);
         }
     }
     
@@ -172,10 +253,17 @@ class EnhancedUnmuteVoiceAssistant {
                 return;
             }
             
-            const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+            const audioBlob = new Blob(this.audioChunks, { type: 'audio/webm;codecs=opus' });
             console.log('📦 Audio blob size:', audioBlob.size, 'bytes');
             
+            if (audioBlob.size === 0) {
+                console.warn('⚠️ Empty audio blob');
+                return;
+            }
+            
             const arrayBuffer = await audioBlob.arrayBuffer();
+            
+            // Decode audio data
             const audioData = await this.audioContext.decodeAudioData(arrayBuffer);
             
             // Convert to float32 array
@@ -187,7 +275,7 @@ class EnhancedUnmuteVoiceAssistant {
             
         } catch (error) {
             console.error('❌ Audio processing error:', error);
-            this.showError('Failed to process audio');
+            this.showError('Failed to process audio: ' + error.message);
         }
     }
     
@@ -204,10 +292,15 @@ class EnhancedUnmuteVoiceAssistant {
                 emotion: this.currentEmotion
             };
             
-            this.ws.send(JSON.stringify(message));
-            console.log('✅ Audio data sent successfully');
+            try {
+                this.ws.send(JSON.stringify(message));
+                console.log('✅ Audio data sent successfully');
+            } catch (error) {
+                console.error('❌ Failed to send audio data:', error);
+                this.showError('Failed to send audio data');
+            }
         } else {
-            console.error('❌ WebSocket not ready');
+            console.error('❌ WebSocket not ready, state:', this.ws ? this.ws.readyState : 'null');
             this.showError('WebSocket connection not ready');
         }
     }
@@ -239,7 +332,7 @@ class EnhancedUnmuteVoiceAssistant {
                 
             case 'error':
                 console.error('❌ Server error:', data.message);
-                this.showError(data.message);
+                this.showError('Server error: ' + data.message);
                 break;
                 
             case 'pong':
@@ -253,6 +346,11 @@ class EnhancedUnmuteVoiceAssistant {
     
     addMessage(text, sender) {
         const conversation = document.getElementById('conversation');
+        if (!conversation) {
+            console.error('❌ Conversation element not found');
+            return;
+        }
+        
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${sender}`;
         
@@ -282,6 +380,11 @@ class EnhancedUnmuteVoiceAssistant {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             }
             
+            // Resume audio context if suspended
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+            
             const audioBuffer = this.audioContext.createBuffer(1, audioArray.length, 24000);
             const channelData = audioBuffer.getChannelData(0);
             
@@ -292,18 +395,27 @@ class EnhancedUnmuteVoiceAssistant {
             const source = this.audioContext.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(this.audioContext.destination);
+            
+            source.onended = () => {
+                console.log('🔊 Audio playback finished');
+            };
+            
             source.start();
             
             console.log('✅ Audio playback started');
             
         } catch (error) {
             console.error('❌ Audio playback error:', error);
+            this.showError('Audio playback failed: ' + error.message);
         }
     }
     
     setEmotion(emotion) {
         this.currentEmotion = emotion;
-        document.getElementById('current-emotion').textContent = emotion;
+        const emotionElement = document.getElementById('current-emotion');
+        if (emotionElement) {
+            emotionElement.textContent = emotion;
+        }
         
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
             this.ws.send(JSON.stringify({
@@ -317,7 +429,9 @@ class EnhancedUnmuteVoiceAssistant {
     
     clearChat() {
         const conversation = document.getElementById('conversation');
-        conversation.innerHTML = '';
+        if (conversation) {
+            conversation.innerHTML = '';
+        }
         
         // Reset metrics
         this.performanceMetrics = {
@@ -343,22 +457,18 @@ class EnhancedUnmuteVoiceAssistant {
     }
     
     updatePerformanceMetrics() {
-        const turnCountElement = document.getElementById('turn-count');
-        const totalRequestsElement = document.getElementById('total-requests');
-        const successRateElement = document.getElementById('success-rate');
+        const elements = {
+            'turn-count': this.performanceMetrics.turnCount,
+            'total-requests': this.performanceMetrics.totalRequests,
+            'success-rate': this.performanceMetrics.totalRequests > 0 ? 
+                (this.performanceMetrics.successfulRequests / this.performanceMetrics.totalRequests * 100).toFixed(1) + '%' : '100%'
+        };
         
-        if (turnCountElement) {
-            turnCountElement.textContent = this.performanceMetrics.turnCount;
-        }
-        
-        if (totalRequestsElement) {
-            totalRequestsElement.textContent = this.performanceMetrics.totalRequests;
-        }
-        
-        if (successRateElement) {
-            const successRate = this.performanceMetrics.totalRequests > 0 ? 
-                (this.performanceMetrics.successfulRequests / this.performanceMetrics.totalRequests * 100).toFixed(1) : 100;
-            successRateElement.textContent = `${successRate}%`;
+        for (const [id, value] of Object.entries(elements)) {
+            const element = document.getElementById(id);
+            if (element) {
+                element.textContent = value;
+            }
         }
     }
     
@@ -395,26 +505,28 @@ class EnhancedUnmuteVoiceAssistant {
             const average = dataArray.reduce((sum, value) => sum + value, 0) / dataArray.length;
             const level = Math.round((average / 255) * 100);
             const audioLevelElement = document.getElementById('audio-level');
-            if (audioLevelElement) {
+            if (audiogLevelElement) {
                 audioLevelElement.textContent = `Level: ${level}%`;
             }
         }
     }
     
     drawVisualization(dataArray = null) {
+        if (!this.canvas || !this.canvasCtx) return;
+        
         const width = this.canvas.width;
         const height = this.canvas.height;
         
         this.canvasCtx.clearRect(0, 0, width, height);
         
-        if (dataArray) {
+        if (dataArray && dataArray.length > 0) {
             // Draw frequency bars
             this.canvasCtx.fillStyle = '#007bff';
             
-            const barWidth = width / dataArray.length * 2;
+            const barWidth = width / (dataArray.length / 4);
             let x = 0;
             
-            for (let i = 0; i < dataArray.length; i++) {
+            for (let i = 0; i < dataArray.length / 4; i++) {
                 const barHeight = (dataArray[i] / 255) * height;
                 
                 this.canvasCtx.fillRect(x, height - barHeight, barWidth, barHeight);
@@ -449,7 +561,7 @@ class EnhancedUnmuteVoiceAssistant {
             
             console.log('📊 System status:', data);
             
-            if (data.status === 'running') {
+            if (data.status === 'running' && this.microphonePermission) {
                 this.updateStatus('Ready', 'connected');
             }
         } catch (error) {
@@ -461,12 +573,34 @@ class EnhancedUnmuteVoiceAssistant {
     showError(message) {
         console.error('❌ Error:', message);
         this.addMessage(`Error: ${message}`, 'system');
-        alert(`❌ Error: ${message}`);
+        
+        // Show user-friendly alert
+        alert(`❌ Error: ${message}\n\nPlease try:\n1. Refresh the page\n2. Allow microphone access\n3. Check your internet connection`);
     }
 }
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
     console.log('🚀 Initializing Enhanced Unmute Voice Assistant...');
+    
+    // Check for HTTPS requirement
+    if (window.location.protocol !== 'https:' && window.location.hostname !== 'localhost') {
+        alert('⚠️ HTTPS is required for microphone access. Please use HTTPS.');
+        return;
+    }
+    
+    // Check for WebSocket support
+    if (!window.WebSocket) {
+        alert('❌ WebSocket not supported in this browser.');
+        return;
+    }
+    
+    // Check for MediaRecorder support
+    if (!window.MediaRecorder) {
+        alert('❌ MediaRecorder not supported in this browser.');
+        return;
+    }
+    
+    // Initialize the assistant
     new EnhancedUnmuteVoiceAssistant();
 });
