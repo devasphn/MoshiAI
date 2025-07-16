@@ -1,6 +1,6 @@
 moshi==0.2.10
-torch==2.1.0
-torchaudio==2.1.0
+torch==2.4.0
+torchaudio==2.4.0
 transformers==4.36.0
 fastapi==0.104.1
 uvicorn==0.24.0
