@@ -165,17 +165,3 @@ class VoiceAssistant {
     
     updateEmotionButtons() {
         this.emotionBtns.forEach(btn => {
-            btn.classList.toggle('active', btn.dataset.emotion === this.currentEmotion);
-        });
-    }
-    
-    updateStatus(status) {
-        this.statusEl.textContent = status;
-        this.statusEl.className = `status-indicator ${status.toLowerCase()}`;
-    }
-}
-
-// Initialize the voice assistant when the page loads
-document.addEventListener('DOMContentLoaded', () => {
-    new VoiceAssistant();
-});
