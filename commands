@@ -1,7 +1,6 @@
 cd /workspace
 git clone https://github.com/devasphn/MoshiAI.git
 cd MoshiAI
-wget https://huggingface.co/datasets/ai4bharat/indic-tts/resolve/main/samples/indictts_tamil_female.wav -O voices/indian_female.wav
 python3 -m venv venv
 source venv/bin/activate
 apt-get update
