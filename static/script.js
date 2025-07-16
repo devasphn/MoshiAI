@@ -37,10 +37,9 @@ class VoiceAssistant {
     
     async startCall() {
         try {
-            // Request microphone access
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
             
-            // Setup WebSocket connection
             this.ws = new WebSocket(`ws://${window.location.host}/ws`);
             
             this.ws.onopen = () => {
@@ -64,8 +63,8 @@ class VoiceAssistant {
                 this.muteBtn.disabled = true;
             };
             
-            // Setup media recorder
             this.mediaRecorder = new MediaRecorder(stream);
+
             this.mediaRecorder.ondataavailable = (event) => {
                 if (event.data.size > 0 && this.isConnected && !this.isMuted) {
                     this.sendAudioData(event.data);
@@ -84,11 +83,9 @@ class VoiceAssistant {
         if (this.ws) {
             this.ws.close();
         }
-        
         if (this.mediaRecorder) {
             this.mediaRecorder.stop();
         }
-        
         this.isConnected = false;
         this.updateStatus('Disconnected');
         this.startBtn.disabled = false;
@@ -111,35 +108,35 @@ class VoiceAssistant {
     
     handleResponse(data) {
         if (data.type === 'response') {
-            const { user_text, ai_text, emotion } = data.data;
-            
+            const { user_text, ai_text, audio, emotion } = data.data;
             // Update transcripts
             if (user_text) {
                 this.userTranscriptEl.querySelector('.text').textContent = user_text;
             }
-            
             if (ai_text) {
                 this.aiTranscriptEl.querySelector('.text').textContent = ai_text;
             }
-            
-            // Update current emotion
+            // Update emotion on UI
             if (emotion) {
                 this.currentEmotion = emotion;
                 this.currentEmotionEl.textContent = emotion;
                 this.updateEmotionButtons();
             }
-            
-            // Play AI response audio
-            if (data.data.audio) {
-                this.playAudioResponse(data.data.audio);
+            // Play the returned audio
+            if (audio && audio.length > 0) {
+                this.playAudioResponse(audio);
             }
         }
     }
     
-    playAudioResponse(audioData) {
-        const audio = new Audio();
-        const blob = new Blob([audioData], { type: 'audio/wav' });
-        audio.src = URL.createObjectURL(blob);
+    playAudioResponse(audioDataB64) {
+        // If you send audio as base64 (recommend), decode accordingly.
+        // If sent as bytes (from backend), treat as array buffer.
+        // We'll assume bytes here (since backend sends .tobytes())
+        const byteArray = Uint8Array.from(atob(btoa(audioDataB64)), c => c.charCodeAt(0));
+        const audioBlob = new Blob([byteArray], { type: 'audio/wav' });
+        const url = URL.createObjectURL(audioBlob);
+        const audio = new Audio(url);
         audio.play();
     }
     
@@ -152,7 +149,6 @@ class VoiceAssistant {
                 },
                 body: JSON.stringify({ emotion })
             });
-            
             if (response.ok) {
                 this.currentEmotion = emotion;
                 this.currentEmotionEl.textContent = emotion;
@@ -165,3 +161,22 @@ class VoiceAssistant {
     
     updateEmotionButtons() {
         this.emotionBtns.forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.emotion === this.currentEmotion);
+        });
+    }
+    
+    updateStatus(status) {
+        this.statusEl.textContent = status;
+        if (status === 'Connected') {
+            this.statusEl.classList.remove('disconnected');
+            this.statusEl.classList.add('connected');
+        } else {
+            this.statusEl.classList.remove('connected');
+            this.statusEl.classList.add('disconnected');
+        }
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    new VoiceAssistant();
+});
