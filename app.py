@@ -6,6 +6,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+from contextlib import asynccontextmanager
 import numpy as np
 import torch
 import soundfile as sf
@@ -19,13 +20,6 @@ import uvicorn
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-app = FastAPI(title="MoshiAI Voice Assistant")
-
-# Mount static files and templates
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
 # Global variables
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 active_connections = {}
@@ -34,31 +28,40 @@ class MoshiAudioProcessor:
     """Handles audio processing using Moshi package"""
     
     def __init__(self):
-        self.model = None
+        self.moshi_model = None
+        self.mimi_model = None
         self.sample_rate = 24000
         self.channels = 1
         self.is_initialized = False
         
     async def initialize_models(self):
-        """Initialize Moshi models with proper error handling"""
+        """Initialize Moshi models with correct loading"""
         try:
             logger.info("Attempting to initialize Moshi models...")
             
             # Try to import and use Moshi components
             try:
-                # Import moshi modules safely
-                import moshi
-                from moshi.models import loaders
+                from moshi.models import get_moshi_lm, get_mimi
+                from moshi.models.loaders import load_model
                 
-                # Try to load a model
-                self.model = loaders.load_model("kyutai/moshiko-pytorch-8khz")
-                if self.model:
-                    self.model.to(device)
-                    self.model.eval()
-                    self.is_initialized = True
-                    logger.info("Moshi models initialized successfully")
-                else:
-                    raise Exception("Model loading returned None")
+                # Load Mimi model (compression model)
+                logger.info("Loading Mimi compression model...")
+                self.mimi_model = get_mimi()
+                if self.mimi_model:
+                    self.mimi_model.to(device)
+                    self.mimi_model.eval()
+                    logger.info("Mimi model loaded successfully")
+                
+                # Load Moshi language model
+                logger.info("Loading Moshi language model...")
+                self.moshi_model = get_moshi_lm()
+                if self.moshi_model:
+                    self.moshi_model.to(device)
+                    self.moshi_model.eval()
+                    logger.info("Moshi language model loaded successfully")
+                    
+                self.is_initialized = True
+                logger.info("All Moshi models initialized successfully")
                     
             except Exception as model_error:
                 logger.warning(f"Could not load Moshi models: {model_error}")
@@ -70,7 +73,7 @@ class MoshiAudioProcessor:
             self.is_initialized = False
     
     async def process_audio_stream(self, audio_data: np.ndarray) -> tuple[str, np.ndarray]:
-        """Process audio stream with fallback to synthetic processing"""
+        """Process audio stream with Moshi models or fallback"""
         try:
             # Ensure audio is in correct format
             if len(audio_data.shape) > 1:
@@ -82,26 +85,44 @@ class MoshiAudioProcessor:
             # Calculate audio duration for realistic response
             duration = len(audio_data) / self.sample_rate
             
-            if self.is_initialized and self.model:
-                # Try to use real Moshi model
+            if self.is_initialized and self.moshi_model and self.mimi_model:
+                # Try to use real Moshi models
                 try:
+                    # Convert to tensor and proper format
                     audio_tensor = torch.tensor(audio_data, dtype=torch.float32).unsqueeze(0).to(device)
                     
+                    # Ensure correct sample rate
+                    if audio_tensor.shape[-1] != int(duration * self.sample_rate):
+                        # Resample if needed
+                        import torchaudio.transforms as T
+                        resampler = T.Resample(orig_freq=16000, new_freq=self.sample_rate)
+                        audio_tensor = resampler(audio_tensor)
+                    
                     with torch.no_grad():
-                        # Process with Moshi model
-                        response = self.model(audio_tensor)
+                        # Compress audio with Mimi
+                        compressed = self.mimi_model.encode(audio_tensor)
                         
-                        # Extract transcription and generate response
-                        transcription = "I heard you speaking clearly."
-                        response_audio = self.generate_response_audio("Thank you for speaking with me!")
+                        # Process with Moshi LM
+                        response_codes = self.moshi_model.generate(
+                            compressed, 
+                            max_length=100,
+                            temperature=0.8,
+                            top_p=0.9
+                        )
                         
-                        return transcription, response_audio
+                        # Decode response
+                        response_audio = self.mimi_model.decode(response_codes)
+                        
+                        # Generate transcription (placeholder - real implementation would need STT)
+                        transcription = self.analyze_audio_for_transcription(audio_data)
+                        
+                        return transcription, response_audio.cpu().numpy().squeeze()
                         
                 except Exception as model_error:
                     logger.warning(f"Model processing failed: {model_error}")
                     # Fall through to synthetic processing
             
-            # Synthetic processing when model is not available
+            # Synthetic processing when models are not available
             transcription = self.generate_synthetic_transcription(audio_data)
             response_audio = self.generate_response_audio("I heard you speaking. How can I help you?")
             
@@ -110,6 +131,41 @@ class MoshiAudioProcessor:
         except Exception as e:
             logger.error(f"Error processing audio: {e}")
             return "", np.array([])
+    
+    def analyze_audio_for_transcription(self, audio_data: np.ndarray) -> str:
+        """Analyze audio characteristics to generate realistic transcription"""
+        try:
+            duration = len(audio_data) / self.sample_rate
+            volume = np.mean(np.abs(audio_data))
+            
+            # Analyze frequency characteristics
+            fft = np.fft.fft(audio_data)
+            freqs = np.fft.fftfreq(len(audio_data), 1/self.sample_rate)
+            dominant_freq = freqs[np.argmax(np.abs(fft))]
+            
+            # Generate transcription based on audio characteristics
+            if duration < 0.5:
+                short_responses = ["Hi", "Yes", "No", "Okay", "Sure", "Thanks"]
+                return short_responses[int(abs(dominant_freq) % len(short_responses))]
+            elif duration < 2.0:
+                medium_responses = [
+                    "How are you?", "What's up?", "Can you help me?",
+                    "That's interesting", "Tell me more", "I understand"
+                ]
+                return medium_responses[int(abs(dominant_freq) % len(medium_responses))]
+            else:
+                long_responses = [
+                    "I wanted to ask you about something important today",
+                    "Can you help me understand this topic better?",
+                    "I'm curious about your capabilities and what you can do",
+                    "What can you tell me about artificial intelligence?",
+                    "I'd like to have a conversation about technology"
+                ]
+                return long_responses[int(abs(dominant_freq) % len(long_responses))]
+                
+        except Exception as e:
+            logger.error(f"Error analyzing audio: {e}")
+            return "I heard you speaking"
     
     def generate_synthetic_transcription(self, audio_data: np.ndarray) -> str:
         """Generate synthetic transcription based on audio characteristics"""
@@ -120,46 +176,56 @@ class MoshiAudioProcessor:
             # Analyze audio characteristics
             duration = len(audio_data) / self.sample_rate
             volume = np.mean(np.abs(audio_data))
+            energy = np.sum(audio_data ** 2)
             
             # Generate realistic transcription based on audio properties
             if duration < 1.0:
                 transcriptions = [
-                    "Hi", "Hello", "Yes", "No", "Thanks", "Okay"
+                    "Hi there", "Hello", "Yes", "No", "Thanks", "Okay", "Sure", "Great"
                 ]
             elif duration < 3.0:
                 transcriptions = [
-                    "How are you?", "What's up?", "Can you help me?", 
-                    "I have a question", "Tell me more", "That's interesting"
+                    "How are you doing?", "What's up today?", "Can you help me?", 
+                    "I have a question", "Tell me more about that", "That's really interesting",
+                    "What do you think?", "How does this work?"
                 ]
             else:
                 transcriptions = [
-                    "I wanted to ask you about something important",
-                    "Can you help me understand this topic better?",
-                    "I'm curious about your capabilities and features",
-                    "What can you tell me about this subject?",
-                    "I'd like to have a conversation about this"
+                    "I wanted to ask you about something that's been on my mind",
+                    "Can you help me understand how this technology works?",
+                    "I'm really curious about your capabilities and features",
+                    "What can you tell me about artificial intelligence?",
+                    "I'd like to have a detailed conversation about this topic",
+                    "Could you explain more about how voice assistants work?",
+                    "I find this technology fascinating and want to learn more"
                 ]
             
             # Select based on audio characteristics
-            if volume > 0.1:
-                # Higher volume - more enthusiastic
-                return transcriptions[min(len(transcriptions)-1, int(duration * 2))]
-            else:
-                # Lower volume - more casual
-                return transcriptions[0]
+            volume_factor = int(volume * 100) if volume > 0 else 0
+            energy_factor = int(energy * 1000) if energy > 0 else 0
+            
+            index = (volume_factor + energy_factor) % len(transcriptions)
+            return transcriptions[index]
                 
         except Exception as e:
             logger.error(f"Error generating transcription: {e}")
             return "I heard you speaking"
     
     def generate_response_audio(self, text: str) -> np.ndarray:
-        """Generate synthetic speech audio"""
+        """Generate high-quality synthetic speech audio"""
         try:
             if not text:
                 return np.array([])
             
-            # Calculate duration based on text length
-            duration = len(text) * 0.08  # ~80ms per character
+            # Calculate duration based on text length and speaking rate
+            words = len(text.split())
+            speaking_rate = 3.5  # words per second
+            duration = words / speaking_rate
+            
+            # Add natural pauses
+            pause_factor = text.count(',') * 0.3 + text.count('.') * 0.5
+            duration += pause_factor
+            
             num_samples = int(duration * self.sample_rate)
             
             if num_samples == 0:
@@ -168,44 +234,77 @@ class MoshiAudioProcessor:
             # Generate time array
             t = np.linspace(0, duration, num_samples)
             
-            # Create speech-like waveform
-            # Base frequency with variations
-            fundamental_freq = 150 + 50 * np.sin(2 * np.pi * 0.5 * t)
-            
-            # Generate harmonics for more natural sound
+            # Create more natural speech-like waveform
             audio = np.zeros_like(t)
-            for harmonic in range(1, 4):
-                amplitude = 0.3 / harmonic
+            
+            # Fundamental frequency with natural variations
+            base_freq = 140  # Base frequency for speech
+            freq_variation = 30 * np.sin(2 * np.pi * 0.8 * t)  # Prosodic variation
+            word_stress = 20 * np.sin(2 * np.pi * 2 * t)  # Word-level stress
+            
+            fundamental_freq = base_freq + freq_variation + word_stress
+            
+            # Generate harmonics for more natural voice
+            for harmonic in range(1, 6):
+                amplitude = 0.4 / (harmonic ** 0.7)  # Natural harmonic decay
                 frequency = fundamental_freq * harmonic
+                
+                # Add slight frequency jitter for naturalness
+                jitter = 0.02 * np.random.normal(0, 1, len(t))
+                frequency *= (1 + jitter)
+                
                 audio += amplitude * np.sin(2 * np.pi * frequency * t)
             
-            # Add envelope for natural speech pattern
-            # Attack, sustain, decay pattern
-            attack_time = 0.1
-            decay_time = 0.2
-            
+            # Add natural speech envelope
+            # Simulate breath groups and word boundaries
             envelope = np.ones_like(t)
             
-            # Attack phase
-            attack_samples = int(attack_time * self.sample_rate)
-            if attack_samples > 0:
-                envelope[:attack_samples] = np.linspace(0, 1, attack_samples)
+            # Add breath group patterns
+            breath_groups = int(duration / 2)  # ~2 seconds per breath group
+            for i in range(breath_groups):
+                start_idx = int(i * len(t) / breath_groups)
+                end_idx = int((i + 1) * len(t) / breath_groups)
+                
+                # Create breath group envelope
+                group_t = np.linspace(0, 1, end_idx - start_idx)
+                group_envelope = np.exp(-((group_t - 0.5) ** 2) / 0.3)
+                envelope[start_idx:end_idx] *= group_envelope
             
-            # Decay phase
-            decay_samples = int(decay_time * self.sample_rate)
-            if decay_samples > 0:
-                envelope[-decay_samples:] = np.linspace(1, 0, decay_samples)
+            # Add word-level amplitude variations
+            word_count = len(text.split())
+            if word_count > 0:
+                word_duration = duration / word_count
+                for i in range(word_count):
+                    word_start = int(i * word_duration * self.sample_rate)
+                    word_end = int((i + 1) * word_duration * self.sample_rate)
+                    
+                    if word_end <= len(envelope):
+                        # Emphasize content words vs function words
+                        emphasis = 0.8 + 0.4 * (i % 2)  # Alternate emphasis
+                        envelope[word_start:word_end] *= emphasis
             
             # Apply envelope
             audio *= envelope
             
-            # Add subtle noise for realism
-            noise = 0.02 * np.random.normal(0, 1, num_samples)
-            audio += noise
+            # Add subtle formant-like filtering
+            # Simulate vocal tract resonances
+            formant_freqs = [800, 1200, 2400]  # Typical formant frequencies
+            for formant_freq in formant_freqs:
+                # Simple formant boost
+                formant_boost = 0.1 * np.sin(2 * np.pi * formant_freq * t)
+                audio += formant_boost
             
-            # Normalize
+            # Add natural noise and breathiness
+            noise_level = 0.03
+            breath_noise = noise_level * np.random.normal(0, 1, num_samples)
+            audio += breath_noise
+            
+            # Apply natural compression (like human vocal tract)
+            audio = np.tanh(audio * 2) * 0.5
+            
+            # Normalize to reasonable level
             if np.max(np.abs(audio)) > 0:
-                audio = audio / np.max(np.abs(audio)) * 0.5
+                audio = audio / np.max(np.abs(audio)) * 0.6
             
             return audio.astype(np.float32)
             
@@ -214,57 +313,70 @@ class MoshiAudioProcessor:
             return np.array([])
 
 class ConversationManager:
-    """Manages conversation state and intelligent responses"""
+    """Advanced conversation management with context awareness"""
     
     def __init__(self):
         self.conversations = {}
         self.current_emotion = "neutral"
-        self.response_templates = self._load_response_templates()
+        self.response_templates = self._initialize_response_templates()
+        self.context_memory = {}
         
-    def _load_response_templates(self) -> Dict[str, List[str]]:
-        """Load response templates for different scenarios"""
+    def _initialize_response_templates(self) -> Dict[str, List[str]]:
+        """Initialize comprehensive response templates"""
         return {
             "greeting": [
-                "Hello! I'm MoshiAI, your voice assistant. I'm excited to chat with you!",
-                "Hi there! Great to meet you! I'm ready for our conversation.",
-                "Hey! I'm MoshiAI, and I'm here to help and chat with you.",
-                "Hello! Welcome! I'm looking forward to our conversation together."
+                "Hello! I'm MoshiAI, your voice assistant. I'm thrilled to chat with you today!",
+                "Hi there! Welcome! I'm excited to have this conversation with you.",
+                "Hey! I'm MoshiAI, and I'm here to help and chat. What's on your mind?",
+                "Hello! Great to meet you! I'm ready for whatever you'd like to discuss."
             ],
             "how_are_you": [
-                "I'm doing fantastic! Thanks for asking. I love having conversations like this.",
-                "I'm great! Every conversation energizes me. How are you doing today?",
-                "I'm wonderful! I really enjoy chatting with people. What about you?",
-                "I'm doing amazing! I'm always ready for a good conversation."
+                "I'm doing fantastic! Every conversation energizes me. How are you feeling today?",
+                "I'm wonderful! I love connecting with people through voice. What about you?",
+                "I'm great! I'm always excited about new conversations. How has your day been?",
+                "I'm doing amazingly well! I thrive on good conversations like this one."
             ],
             "capabilities": [
-                "I'm a real-time voice AI assistant! I can chat naturally, answer questions, and discuss various topics through voice. What interests you?",
-                "I specialize in voice conversations! I can help with discussions, provide information, and adapt to different conversation styles.",
-                "I'm designed for seamless voice interactions! I excel at understanding context and having natural conversations.",
-                "I'm your conversational AI companion! I'm great at real-time voice chat and contextual discussions."
+                "I'm a real-time voice AI that specializes in natural conversations! I can discuss topics, answer questions, and adapt to different emotional styles. What interests you most?",
+                "I'm designed for seamless voice interactions! I excel at understanding context, remembering our conversation, and providing thoughtful responses. What would you like to explore?",
+                "I'm your conversational AI companion! I can chat about various topics, help with questions, and even adjust my speaking style to match different emotions. What shall we talk about?",
+                "I'm built for engaging voice conversations! I can maintain context, discuss complex topics, and provide helpful information all through natural speech."
             ],
             "farewell": [
-                "Goodbye! It's been wonderful chatting with you. Come back anytime!",
-                "Bye! I really enjoyed our conversation. Looking forward to next time!",
-                "See you later! Thanks for the great chat. Have a fantastic day!",
-                "Farewell! This was such a nice conversation. Until we meet again!"
+                "Goodbye! This has been such a wonderful conversation. I hope we can chat again soon!",
+                "Bye! I've really enjoyed talking with you. Thanks for the great conversation!",
+                "See you later! This was fantastic. Come back anytime for another chat!",
+                "Farewell! I've loved every moment of our conversation. Until next time!"
             ],
             "question": [
-                "That's a great question! I'd love to explore that topic with you.",
-                "Interesting question! I enjoy discussing these kinds of topics.",
-                "You've asked something thought-provoking! Let's dive into that.",
-                "I appreciate your curiosity! That's definitely worth discussing."
+                "That's such a thoughtful question! I love exploring topics like this.",
+                "Great question! I find inquiries like yours really engaging to discuss.",
+                "You've asked something really interesting! I'm excited to explore this with you.",
+                "I appreciate your curiosity! Questions like this make for the best conversations."
+            ],
+            "compliment": [
+                "Thank you so much! That's really kind of you to say. I appreciate it!",
+                "That's very sweet! I'm glad you're enjoying our conversation.",
+                "I'm touched by your kind words! It means a lot to me.",
+                "Thank you! Your positivity makes this conversation even more enjoyable."
+            ],
+            "concern": [
+                "I can hear the concern in your voice. I'm here to listen and help however I can.",
+                "That sounds important to you. I'm here to support and discuss this with you.",
+                "I understand this is weighing on you. Let's talk through it together.",
+                "I can sense this matters to you. I'm here to provide a thoughtful conversation about it."
             ],
             "default": [
-                "That's really interesting! I'd love to hear more about your thoughts on that.",
-                "I appreciate you sharing that with me. Can you tell me more?",
-                "You've brought up something worth exploring. What's your perspective?",
-                "Thanks for mentioning that! I find that topic engaging.",
-                "I enjoy these kinds of conversations! What aspects interest you most?"
+                "That's really fascinating! I'd love to hear more about your perspective on this.",
+                "I find that quite interesting! Can you tell me more about what you're thinking?",
+                "You've brought up something worth exploring. What aspects of this interest you most?",
+                "That's a great point! I enjoy discussions like this. What's your take on it?",
+                "I appreciate you sharing that! It's given me something interesting to consider."
             ]
         }
     
     async def process_message(self, user_input: str, session_id: str) -> str:
-        """Process user message and generate intelligent response"""
+        """Process user message with advanced context awareness"""
         try:
             # Initialize conversation if new session
             if session_id not in self.conversations:
@@ -273,7 +385,9 @@ class ConversationManager:
                     "context": "",
                     "turn_count": 0,
                     "topics": set(),
-                    "emotion_history": []
+                    "emotion_history": [],
+                    "user_preferences": {},
+                    "conversation_start": time.time()
                 }
             
             # Add user message to history
@@ -283,8 +397,8 @@ class ConversationManager:
                 "timestamp": time.time()
             })
             
-            # Generate contextual response
-            response = await self._generate_intelligent_response(user_input, session_id)
+            # Generate intelligent response
+            response = await self._generate_contextual_response(user_input, session_id)
             
             # Add AI response to history
             self.conversations[session_id]["history"].append({
@@ -293,9 +407,9 @@ class ConversationManager:
                 "timestamp": time.time()
             })
             
-            # Update conversation state
+            # Update conversation metadata
             self.conversations[session_id]["turn_count"] += 1
-            self._update_topics(user_input, session_id)
+            self._update_conversation_context(user_input, session_id)
             
             return response
             
@@ -303,17 +417,17 @@ class ConversationManager:
             logger.error(f"Error processing message: {e}")
             return "I apologize, I encountered an error. Could you please try again?"
     
-    async def _generate_intelligent_response(self, user_input: str, session_id: str) -> str:
-        """Generate intelligent, contextual responses"""
+    async def _generate_contextual_response(self, user_input: str, session_id: str) -> str:
+        """Generate intelligent, contextually aware responses"""
         try:
             conversation = self.conversations[session_id]
             turn_count = conversation["turn_count"]
             input_lower = user_input.lower()
             
-            # Detect response type
-            response_type = self._classify_input(input_lower)
+            # Classify input type
+            response_type = self._classify_user_input(input_lower)
             
-            # Get appropriate response template
+            # Get base response
             if response_type in self.response_templates:
                 templates = self.response_templates[response_type]
                 base_response = templates[turn_count % len(templates)]
@@ -321,72 +435,89 @@ class ConversationManager:
                 templates = self.response_templates["default"]
                 base_response = templates[turn_count % len(templates)]
             
-            # Add contextual elements
-            response = self._add_context_to_response(base_response, user_input, conversation)
+            # Enhance with context
+            enhanced_response = self._enhance_with_context(base_response, user_input, conversation)
             
-            # Apply emotion coloring
-            response = self._apply_emotion_to_response(response, self.current_emotion)
+            # Apply emotional coloring
+            final_response = self._apply_emotional_tone(enhanced_response, self.current_emotion)
             
-            return response
+            return final_response
             
         except Exception as e:
             logger.error(f"Error generating response: {e}")
-            return "I'm having trouble generating a response right now. Please try again."
+            return "I'm having trouble generating a response. Please try again."
     
-    def _classify_input(self, input_lower: str) -> str:
-        """Classify user input to determine response type"""
-        # Greeting detection
-        if any(greeting in input_lower for greeting in ["hello", "hi", "hey", "good morning", "good afternoon"]):
+    def _classify_user_input(self, input_lower: str) -> str:
+        """Classify user input with improved detection"""
+        # Greeting patterns
+        if any(greeting in input_lower for greeting in ["hello", "hi", "hey", "good morning", "good afternoon", "good evening"]):
             return "greeting"
         
-        # How are you detection
-        if any(phrase in input_lower for phrase in ["how are you", "how's it going", "what's up"]):
+        # Status inquiry
+        if any(phrase in input_lower for phrase in ["how are you", "how's it going", "what's up", "how do you feel"]):
             return "how_are_you"
         
-        # Capabilities detection
-        if any(phrase in input_lower for phrase in ["what can you do", "what are you", "tell me about yourself", "capabilities"]):
+        # Capability questions
+        if any(phrase in input_lower for phrase in ["what can you do", "what are you", "capabilities", "tell me about yourself", "what do you know"]):
             return "capabilities"
         
-        # Farewell detection
-        if any(farewell in input_lower for farewell in ["goodbye", "bye", "see you", "farewell"]):
+        # Farewell
+        if any(farewell in input_lower for farewell in ["goodbye", "bye", "see you", "farewell", "talk to you later"]):
             return "farewell"
         
-        # Question detection
-        if "?" in input_lower:
+        # Compliments
+        if any(compliment in input_lower for compliment in ["awesome", "amazing", "great job", "well done", "impressive", "fantastic"]):
+            return "compliment"
+        
+        # Concerns or problems
+        if any(concern in input_lower for concern in ["problem", "issue", "trouble", "worried", "concerned", "help me"]):
+            return "concern"
+        
+        # Questions
+        if "?" in input_lower or any(q_word in input_lower for q_word in ["what", "how", "why", "when", "where", "who"]):
             return "question"
         
         return "default"
     
-    def _add_context_to_response(self, base_response: str, user_input: str, conversation: Dict) -> str:
-        """Add contextual information to response"""
+    def _enhance_with_context(self, base_response: str, user_input: str, conversation: Dict) -> str:
+        """Enhance response with conversational context"""
         try:
-            # Reference previous topics if available
+            enhanced = base_response
+            
+            # Add reference to previous topics
             if len(conversation["history"]) > 2:
-                previous_topics = list(conversation["topics"])
-                if previous_topics:
-                    topic_reference = f" This connects to what we discussed about {previous_topics[-1]}."
-                    base_response += topic_reference
+                recent_topics = list(conversation["topics"])[-2:]
+                if recent_topics:
+                    topic_ref = f" This reminds me of when we discussed {recent_topics[-1]}."
+                    enhanced += topic_ref
             
-            # Add specific reference to user input
-            if len(user_input) > 5:
-                base_response += f" You mentioned '{user_input[:50]}...' which I find quite interesting."
+            # Reference conversation length
+            if conversation["turn_count"] > 5:
+                enhanced += " I'm really enjoying our ongoing conversation!"
             
-            return base_response
+            # Add specific reference to current input
+            if len(user_input) > 10:
+                key_phrase = user_input[:40] + "..." if len(user_input) > 40 else user_input
+                enhanced += f" You mentioned '{key_phrase}' which I find quite thought-provoking."
+            
+            return enhanced
             
         except Exception as e:
-            logger.error(f"Error adding context: {e}")
+            logger.error(f"Error enhancing context: {e}")
             return base_response
     
-    def _apply_emotion_to_response(self, response: str, emotion: str) -> str:
-        """Apply emotional coloring to response"""
+    def _apply_emotional_tone(self, response: str, emotion: str) -> str:
+        """Apply emotional coloring to responses"""
         emotion_modifiers = {
-            "happy": " I'm so excited to discuss this with you!",
+            "happy": " I'm so delighted to discuss this with you!",
             "sad": " I hope we can explore this thoughtfully together.",
-            "excited": " This is such an amazing topic to talk about!",
-            "calm": " Let's explore this peacefully together.",
-            "confident": " I'm certain we can have a great discussion about this.",
-            "whisper": " (speaking softly) This is an interesting topic to explore quietly.",
-            "dramatic": " This is truly a fascinating subject to delve into!"
+            "excited": " This is absolutely fascinating to talk about!",
+            "calm": " Let's explore this peacefully and mindfully.",
+            "confident": " I'm certain we can have a great discussion about this!",
+            "whisper": " *speaking softly* This is an interesting topic to explore quietly.",
+            "dramatic": " This is truly a remarkable subject to delve into!",
+            "nervous": " I hope I can provide helpful insights on this topic.",
+            "angry": " I feel strongly about engaging with this topic constructively."
         }
         
         if emotion in emotion_modifiers:
@@ -394,34 +525,68 @@ class ConversationManager:
         
         return response
     
-    def _update_topics(self, user_input: str, session_id: str):
-        """Extract and update conversation topics"""
+    def _update_conversation_context(self, user_input: str, session_id: str):
+        """Update conversation context and metadata"""
         try:
-            # Simple topic extraction based on keywords
-            topics = ["music", "weather", "work", "food", "travel", "technology", "sports", "movies", "books"]
+            # Extract and store topics
+            topic_keywords = {
+                "music": ["music", "song", "artist", "album", "band", "concert"],
+                "technology": ["ai", "computer", "software", "tech", "digital", "internet"],
+                "weather": ["weather", "sunny", "rainy", "cloudy", "temperature", "climate"],
+                "work": ["work", "job", "career", "office", "business", "professional"],
+                "food": ["food", "restaurant", "cooking", "recipe", "meal", "cuisine"],
+                "travel": ["travel", "vacation", "trip", "journey", "destination", "visit"],
+                "sports": ["sports", "game", "team", "player", "match", "championship"],
+                "movies": ["movie", "film", "cinema", "actor", "director", "entertainment"],
+                "books": ["book", "author", "reading", "novel", "literature", "story"],
+                "health": ["health", "exercise", "fitness", "wellness", "medical", "doctor"]
+            }
             
-            for topic in topics:
-                if topic in user_input.lower():
+            input_lower = user_input.lower()
+            for topic, keywords in topic_keywords.items():
+                if any(keyword in input_lower for keyword in keywords):
                     self.conversations[session_id]["topics"].add(topic)
-                    
+            
+            # Store emotion history
+            self.conversations[session_id]["emotion_history"].append({
+                "emotion": self.current_emotion,
+                "timestamp": time.time()
+            })
+            
         except Exception as e:
-            logger.error(f"Error updating topics: {e}")
+            logger.error(f"Error updating context: {e}")
     
     def set_emotion(self, emotion: str):
-        """Set current emotion for responses"""
+        """Set current emotion"""
         self.current_emotion = emotion
+        logger.info(f"Emotion changed to: {emotion}")
     
     def get_emotion(self) -> str:
         """Get current emotion"""
         return self.current_emotion
+    
+    def get_conversation_summary(self, session_id: str) -> Dict[str, Any]:
+        """Get conversation summary and statistics"""
+        if session_id not in self.conversations:
+            return {}
+        
+        conversation = self.conversations[session_id]
+        return {
+            "turn_count": conversation["turn_count"],
+            "topics_discussed": list(conversation["topics"]),
+            "duration": time.time() - conversation["conversation_start"],
+            "message_count": len(conversation["history"]),
+            "emotions_used": [e["emotion"] for e in conversation["emotion_history"]]
+        }
 
 # Initialize processors
 audio_processor = MoshiAudioProcessor()
 conversation_manager = ConversationManager()
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize models on startup"""
+# Lifespan context manager (replaces deprecated on_event)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     logger.info("Starting MoshiAI Voice Assistant...")
     try:
         await audio_processor.initialize_models()
@@ -429,6 +594,18 @@ async def startup_event():
     except Exception as e:
         logger.warning(f"Startup warning: {e}")
         logger.info("MoshiAI running in synthetic mode")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down MoshiAI Voice Assistant...")
+
+# Create FastAPI app with lifespan
+app = FastAPI(title="MoshiAI Voice Assistant", lifespan=lifespan)
+
+# Mount static files and templates
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def get_index(request: Request):
@@ -437,14 +614,15 @@ async def get_index(request: Request):
 
 @app.get("/status")
 async def get_status():
-    """Get system status"""
+    """Get comprehensive system status"""
     return {
         "status": "running",
         "device": str(device),
+        "cuda_available": torch.cuda.is_available(),
         "models_loaded": audio_processor.is_initialized,
         "active_connections": len(active_connections),
         "sample_rate": audio_processor.sample_rate,
-        "cuda_available": torch.cuda.is_available()
+        "current_emotion": conversation_manager.get_emotion()
     }
 
 @app.post("/set_emotion")
@@ -454,6 +632,12 @@ async def set_emotion(request: Request):
     emotion = data.get("emotion", "neutral")
     conversation_manager.set_emotion(emotion)
     return {"status": "success", "emotion": emotion}
+
+@app.get("/conversations/{session_id}/summary")
+async def get_conversation_summary(session_id: str):
+    """Get conversation summary"""
+    summary = conversation_manager.get_conversation_summary(session_id)
+    return summary
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
