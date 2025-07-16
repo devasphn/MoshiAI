@@ -9,7 +9,9 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import uvicorn
-from moshi import MimiModel, LMModel, LMGen, loaders
+from moshi.loaders import CheckpointInfo  # Correct loader import
+from moshi.codec import Mimi  # Correct Mimi codec import
+from moshi.models import LMModel  # Correct LM model import
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -23,11 +25,10 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # Global variables for models
-mimi_model = None
-lm_model = None
-lm_gen = None
+mimi = None
+lm = None
 
-# Emotion configurations (unchanged)
+# Emotion and speaking style configurations
 EMOTIONS = {
     "happy": "I'm feeling really happy and cheerful today!",
     "sad": "*sighs* I'm feeling a bit down right now...",
@@ -47,18 +48,20 @@ EMOTIONS = {
 }
 
 async def initialize_models():
-    """Initialize Moshi models (updated for 0.2.10)"""
-    global mimi_model, lm_model, lm_gen
+    """Initialize Moshi models using official loaders"""
+    global mimi, lm
     
     try:
         logger.info("Loading Moshi models...")
         
+        # Load checkpoint info from Hugging Face repo
+        checkpoint_info = CheckpointInfo.from_hf_repo("kyutai/moshika-pytorch-bf16")
+        
         # Load Mimi codec
-        mimi_model = loaders.get_mimi(device="cuda" if torch.cuda.is_available() else "cpu")
+        mimi = Mimi.from_pretrained(checkpoint_info.mimi_checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
         
         # Load LM model
-        lm_model = loaders.get_lm(device="cuda" if torch.cuda.is_available() else "cpu")
-        lm_gen = LMGen(lm_model)
+        lm = LMModel.from_pretrained(checkpoint_info.lm_checkpoint, device="cuda" if torch.cuda.is_available() else "cpu")
         
         logger.info("Models loaded successfully!")
         
@@ -73,13 +76,15 @@ class VoiceAssistant:
         self.is_muted = False
         
     def set_emotion(self, emotion: str):
+        """Set the current emotion/speaking style"""
         if emotion in EMOTIONS:
             self.current_emotion = emotion
             return True
         return False
     
     def apply_emotion_to_text(self, text: str) -> str:
-        if np.random.random() < 0.3:  # Sparing application for natural timing
+        """Apply emotional context to text sparingly for natural flow"""
+        if np.random.random() < 0.3:  # 30% chance to add emotional tag for better timing
             if self.current_emotion == "whispering":
                 return f"*whispers* {text}"
             elif self.current_emotion == "singing":
@@ -95,34 +100,47 @@ class VoiceAssistant:
         return text
     
     async def process_speech(self, audio_data: bytes) -> dict:
+        """Process incoming speech and generate response using Moshi API"""
         try:
             # Convert audio bytes to tensor
-            audio_tensor = torch.frombuffer(audio_data, dtype=torch.float32)
+            audio_tensor = torch.frombuffer(audio_data, dtype=torch.float32).to(mimi.device)
             
-            # Speech-to-text (using Mimi for encoding)
-            with torch.no_grad():
-                encoded = mimi_model.encode(audio_tensor.unsqueeze(0))
-                transcription = lm_gen.generate(encoded)  # Simplified for 0.2.10
+            # Encode audio with Mimi (STT-like processing)
+            encoded = mimi.encode(audio_tensor.unsqueeze(0))
             
-            # Emotion handling and response generation (unchanged logic)
+            # Generate transcription/text from encoded audio
+            transcription_tokens = lm.generate(encoded, max_length=100)  # Adjust max_length as needed
+            transcription = " ".join([str(token) for token in transcription_tokens])  # Simplified token-to-text
+            
+            # Check for emotion commands
             if transcription.lower().startswith("speak with"):
-                emotion_match = next((e for e in EMOTIONS if e in transcription.lower()), None)
+                emotion_match = None
+                for emotion in EMOTIONS:
+                    if emotion in transcription.lower():
+                        emotion_match = emotion
+                        break
+                
                 if emotion_match:
                     self.set_emotion(emotion_match)
                     response_text = f"Switching to {emotion_match} mode. {EMOTIONS[emotion_match]}"
                 else:
-                    response_text = "Available emotions: happy, sad, excited, etc."
+                    response_text = "I understand you want me to change my speaking style. Available emotions include: happy, sad, excited, calm, whispering, singing, dramatic, and more!"
             else:
-                response_text = lm_gen.generate(transcription)
+                # Generate response using LM
+                response_tokens = lm.generate(transcription_tokens, max_length=100)
+                response_text = " ".join([str(token) for token in response_tokens])
+                
+                # Apply emotional context
                 response_text = self.apply_emotion_to_text(response_text)
             
-            # Text-to-speech
-            audio_output = mimi_model.decode(lm_gen.step(response_text))
+            # Synthesize audio output (TTS-like) with Mimi decode
+            response_encoded = lm.generate(response_text)  # Encode response text
+            audio_output = mimi.decode(response_encoded)
             
             return {
                 "user_text": transcription,
                 "ai_text": response_text,
-                "audio": audio_output.numpy().tobytes(),
+                "audio": audio_output.cpu().numpy().tobytes(),
                 "emotion": self.current_emotion
             }
             
@@ -135,31 +153,46 @@ voice_assistant = VoiceAssistant()
 
 @app.on_event("startup")
 async def startup_event():
+    """Initialize models on startup"""
     await initialize_models()
 
 @app.get("/", response_class=HTMLResponse)
 async def get_index(request: Request):
+    """Serve the main page"""
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time voice communication"""
     await websocket.accept()
+    
     try:
         while True:
+            # Receive audio data
             data = await websocket.receive_bytes()
+            
+            # Process speech
             result = await voice_assistant.process_speech(data)
-            await websocket.send_text(json.dumps({"type": "response", "data": result}))
+            
+            # Send response
+            await websocket.send_text(json.dumps({
+                "type": "response",
+                "data": result
+            }))
+            
     except Exception as e:
         logger.error(f"WebSocket error: {e}")
         await websocket.close()
 
 @app.post("/set_emotion")
 async def set_emotion(emotion: str):
+    """Set current emotion/speaking style"""
     success = voice_assistant.set_emotion(emotion)
     return {"success": success, "current_emotion": voice_assistant.current_emotion}
 
 @app.get("/emotions")
 async def get_emotions():
+    """Get available emotions"""
     return {"emotions": list(EMOTIONS.keys())}
 
 if __name__ == "__main__":
