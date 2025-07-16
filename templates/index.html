@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enhanced Unmute Voice Assistant</title>
+    <title>Unmute Voice Assistant</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🎙️ Enhanced Unmute Voice Assistant</h1>
-            <p>Advanced STT → LLM → TTS with Emotion Support & Indian Female Voice</p>
+            <h1>🎙️ Unmute Voice Assistant</h1>
+            <p>Real-time STT → LLM → TTS with Indian Female Voice</p>
             <div class="version-info">v2.0.0</div>
         </header>
 
@@ -36,7 +36,7 @@
 
             <div class="controls">
                 <div class="voice-controls">
-                    <button id="start-btn" class="btn btn-primary">🎤 Start Talking</button>
+                    <button id="start-btn" class="btn btn-primary" disabled>🎤 Start Talking</button>
                     <button id="stop-btn" class="btn btn-secondary" disabled>⏹️ Stop</button>
                 </div>
 
@@ -44,51 +44,26 @@
                     <label for="emotion-select">Voice Emotion:</label>
                     <select id="emotion-select">
                         <option value="neutral">Neutral</option>
-                        <option value="happy">Happy</option>
-                        <option value="sad">Sad</option>
-                        <option value="excited">Excited</option>
-                        <option value="calm">Calm</option>
-                        <option value="angry">Angry</option>
-                        <option value="whisper">Whisper</option>
-                        <option value="dramatic">Dramatic</option>
-                        <option value="confident">Confident</option>
-                        <option value="nervous">Nervous</option>
+                        <!-- Other options can be added back if TTS supports them -->
                     </select>
                 </div>
 
                 <div class="advanced-controls">
                     <button id="clear-btn" class="btn btn-info">🗑️ Clear Chat</button>
-                    <button id="stats-btn" class="btn btn-info">📊 Statistics</button>
                 </div>
             </div>
-
+            
             <div class="audio-visualizer">
-                <canvas id="audio-canvas" width="800" height="100"></canvas>
-                <div class="visualizer-info">
-                    <span>Audio Visualization</span>
+                 <div class="visualizer-info">
+                    <span>Live Audio Input</span>
                     <span id="audio-level">Level: 0%</span>
                 </div>
             </div>
 
-            <div class="performance-panel">
-                <div class="performance-item">
-                    <span class="performance-label">Turn Count:</span>
-                    <span id="turn-count" class="performance-value">0</span>
-                </div>
-                <div class="performance-item">
-                    <span class="performance-label">Total Requests:</span>
-                    <span id="total-requests" class="performance-value">0</span>
-                </div>
-                <div class="performance-item">
-                    <span class="performance-label">Success Rate:</span>
-                    <span id="success-rate" class="performance-value">100%</span>
-                </div>
-            </div>
         </main>
 
         <footer>
-            <p>Powered by Enhanced Kyutai STT, LLM & TTS Models with Emotion Support</p>
-            <p>🇮🇳 Features Indian Female Voice | Real-time Processing | Advanced VAD</p>
+            <p>Powered by Kyutai STT, Moshi LLM & Kyutai TTS</p>
         </footer>
     </div>
 
