@@ -34,6 +34,15 @@ header p {
     opacity: 0.9;
 }
 
+.version-info {
+    font-size: 0.9em;
+    background: rgba(255,255,255,0.2);
+    padding: 5px 15px;
+    border-radius: 15px;
+    display: inline-block;
+    margin-top: 10px;
+}
+
 .status-panel {
     background: rgba(255,255,255,0.95);
     border-radius: 15px;
@@ -61,6 +70,21 @@ header p {
     border-radius: 20px;
     font-weight: 500;
     color: #2d5a2d;
+}
+
+.status-value.connected {
+    background: #d4edda;
+    color: #155724;
+}
+
+.status-value.disconnected {
+    background: #f8d7da;
+    color: #721c24;
+}
+
+.status-value.error {
+    background: #f5c6cb;
+    color: #721c24;
 }
 
 .chat-container {
@@ -103,6 +127,13 @@ header p {
     border-left: 4px solid #007bff;
 }
 
+.message.system {
+    background: #fff3cd;
+    color: #856404;
+    align-self: center;
+    border-left: 4px solid #ffc107;
+}
+
 .message-content {
     line-height: 1.6;
 }
@@ -127,6 +158,11 @@ header p {
 }
 
 .voice-controls {
+    display: flex;
+    gap: 15px;
+}
+
+.advanced-controls {
     display: flex;
     gap: 15px;
 }
@@ -162,6 +198,16 @@ header p {
 
 .btn-secondary:hover:not(:disabled) {
     background: #545b62;
+    transform: translateY(-2px);
+}
+
+.btn-info {
+    background: #17a2b8;
+    color: white;
+}
+
+.btn-info:hover:not(:disabled) {
+    background: #117a8b;
     transform: translateY(-2px);
 }
 
@@ -202,7 +248,17 @@ header p {
     border-radius: 15px;
     padding: 20px;
     text-align: center;
+    margin-bottom: 20px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+}
+
+.visualizer-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 10px;
+    font-size: 0.9em;
+    color: #666;
 }
 
 #audio-canvas {
@@ -210,6 +266,36 @@ header p {
     background: #f8f9fa;
     max-width: 100%;
     height: auto;
+    border: 2px solid #e9ecef;
+}
+
+.performance-panel {
+    background: rgba(255,255,255,0.95);
+    border-radius: 15px;
+    padding: 20px;
+    margin-bottom: 20px;
+    display: flex;
+    justify-content: space-around;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+}
+
+.performance-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+}
+
+.performance-label {
+    font-weight: 600;
+    color: #666;
+    font-size: 0.9em;
+}
+
+.performance-value {
+    font-size: 1.2em;
+    font-weight: 700;
+    color: #007bff;
 }
 
 footer {
@@ -258,7 +344,16 @@ footer {
         justify-content: center;
     }
     
+    .advanced-controls {
+        justify-content: center;
+    }
+    
     .status-panel {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .performance-panel {
         flex-direction: column;
         gap: 10px;
     }
