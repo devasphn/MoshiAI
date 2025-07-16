@@ -143,7 +143,6 @@ class EnhancedUnmuteVoiceAssistant {
         
         try {
             console.log('🎤 Starting enhanced recording...');
-            
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
                     sampleRate: 16000
