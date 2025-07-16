@@ -39,7 +39,6 @@ class VoiceAssistant {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-
             this.ws = new WebSocket(`ws://${window.location.host}/ws`);
             this.ws.binaryType = "arraybuffer";
 
@@ -65,15 +64,12 @@ class VoiceAssistant {
             };
 
             this.mediaRecorder = new MediaRecorder(stream);
-
             this.mediaRecorder.ondataavailable = (event) => {
                 if (event.data.size > 0 && this.isConnected && !this.isMuted) {
                     this.sendAudioData(event.data);
                 }
             };
-
-            this.mediaRecorder.start(100); // Send data every 100ms
-
+            this.mediaRecorder.start(100);
         } catch (error) {
             console.error('Error starting call:', error);
             alert('Could not access microphone. Please check permissions.');
@@ -110,20 +106,17 @@ class VoiceAssistant {
     handleResponse(data) {
         if (data.type === 'response') {
             const { user_text, ai_text, audio, emotion } = data.data;
-            // Update transcripts
             if (user_text) {
                 this.userTranscriptEl.querySelector('.text').textContent = user_text;
             }
             if (ai_text) {
                 this.aiTranscriptEl.querySelector('.text').textContent = ai_text;
             }
-            // Update emotion on UI
             if (emotion) {
                 this.currentEmotion = emotion;
                 this.currentEmotionEl.textContent = emotion;
                 this.updateEmotionButtons();
             }
-            // Play the returned audio
             if (audio && audio.length > 0) {
                 this.playAudioResponse(audio);
             }
@@ -131,11 +124,8 @@ class VoiceAssistant {
     }
 
     playAudioResponse(audioDataB64) {
-        // If backend sends raw bytes as base64 string (recommended), decode it.
-        // If backend sends bytes, you may need to convert it to Uint8Array or Blob.
+        // Handles base64 encoded audio. If sending bytes, adjust accordingly.
         try {
-            // Attempt to decode as base64 (if base64 is used)
-            // If you send raw binary, use as is with Blob.
             const byteCharacters = atob(audioDataB64);
             const byteNumbers = new Array(byteCharacters.length);
             for (let i = 0; i < byteCharacters.length; i++) {
@@ -146,8 +136,8 @@ class VoiceAssistant {
             const url = URL.createObjectURL(audioBlob);
             const audio = new Audio(url);
             audio.play();
-        } catch (error) {
-            // If it's not base64, fallback to raw binary
+        } catch (e) {
+            // If not base64, treat as binary
             const audioBlob = new Blob([audioDataB64], { type: 'audio/wav' });
             const url = URL.createObjectURL(audioBlob);
             const audio = new Audio(url);
