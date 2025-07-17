@@ -44,22 +44,36 @@ def postprocess_audio(audio_tensor: torch.Tensor, target_sr: int = 24000) -> np.
     
     return audio_np.astype(np.float32)
 
-def detect_speech_activity(audio_data: np.ndarray, threshold: float = 0.01) -> bool:
-    """Enhanced voice activity detection"""
+def detect_speech_activity(audio_data: np.ndarray, threshold: float = 0.005) -> bool:
+    """Enhanced voice activity detection with lower threshold"""
     if len(audio_data) == 0:
         return False
     
-    # Energy-based detection
+    # Energy-based detection with lower threshold
     energy = np.mean(audio_data ** 2)
+    
+    if energy < threshold:
+        return False
     
     # Spectral-based detection
     try:
+        # Check if audio has reasonable frequency content
         spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=16000)
         avg_centroid = np.mean(spectral_centroid)
         
-        # Combined detection
-        return energy > threshold and avg_centroid > 500
-    except:
+        # Check for zero crossing rate (voice has specific patterns)
+        zcr = librosa.feature.zero_crossing_rate(audio_data)
+        avg_zcr = np.mean(zcr)
+        
+        # Combined detection with relaxed thresholds
+        has_energy = energy > threshold
+        has_spectral_content = avg_centroid > 200  # Lowered from 500
+        has_reasonable_zcr = 0.01 < avg_zcr < 0.8
+        
+        return has_energy and has_spectral_content and has_reasonable_zcr
+        
+    except Exception as e:
+        # Fallback to simple energy detection
         return energy > threshold
 
 def fix_audio_shape_for_mimi(audio_tensor: torch.Tensor) -> torch.Tensor:
