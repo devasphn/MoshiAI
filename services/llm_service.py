@@ -21,56 +21,77 @@ class MoshiLLMService:
         try:
             logger.info("Initializing Moshi LLM Service...")
             
-            # Find model directory
-            model_dir = models_dir / "llm"
+            # Find the actual snapshot directory
+            model_dir = models_dir / "llm" / "models--kyutai--moshika-pytorch-bf16" / "snapshots"
             llm_path = None
             
-            for path in model_dir.rglob("*"):
-                if "snapshots" in str(path) and path.is_dir():
-                    llm_path = path
-                    break
+            # Find the actual snapshot directory (it will be a hash)
+            if model_dir.exists():
+                snapshot_dirs = [d for d in model_dir.iterdir() if d.is_dir()]
+                if snapshot_dirs:
+                    llm_path = snapshot_dirs[0]  # Use the first (and likely only) snapshot
+                    logger.info(f"Found LLM snapshot directory: {llm_path}")
             
             if not llm_path:
                 logger.warning("LLM model directory not found, using advanced fallback")
                 self.is_initialized = True
                 return True
             
-            # Load tokenizer with correct filename
-            try:
-                tokenizer_file = llm_path / "tokenizer_spm_32k_3.model"
-                if tokenizer_file.exists():
-                    import sentencepiece as spm
-                    self.tokenizer = spm.SentencePieceProcessor()
-                    self.tokenizer.load(str(tokenizer_file))
-                    logger.info("✅ LLM tokenizer loaded")
-                else:
-                    logger.warning(f"LLM tokenizer not found at {tokenizer_file}")
-            except Exception as e:
-                logger.warning(f"Failed to load LLM tokenizer: {e}")
+            # Load tokenizer - try multiple possible names
+            tokenizer_loaded = False
+            tokenizer_files = [
+                "tokenizer_spm_32k_3.model",
+                "tokenizer.model",
+                "tokenizer_spm_32k.model"
+            ]
             
-            # Load model using safetensors
-            try:
-                model_file = llm_path / "model.safetensors"
-                if model_file.exists():
-                    from safetensors.torch import load_file
-                    
-                    # Load model weights
-                    model_weights = load_file(str(model_file))
-                    logger.info(f"✅ Loaded LLM model weights with {len(model_weights)} parameters")
-                    
-                    # Create model wrapper
-                    self.model = torch.nn.Module()
-                    self.model.eval()
-                    self.model.to(self.device)
-                    
-                    self.is_initialized = True
-                    return True
-                else:
-                    logger.warning(f"LLM model file not found at {model_file}")
-                    
-            except Exception as e:
-                logger.warning(f"LLM model loading failed: {e}")
-                
+            for tokenizer_file in tokenizer_files:
+                try:
+                    tokenizer_path = llm_path / tokenizer_file
+                    if tokenizer_path.exists():
+                        import sentencepiece as spm
+                        self.tokenizer = spm.SentencePieceProcessor()
+                        self.tokenizer.load(str(tokenizer_path))
+                        logger.info(f"✅ LLM tokenizer loaded from {tokenizer_file}")
+                        tokenizer_loaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to load tokenizer {tokenizer_file}: {e}")
+            
+            if not tokenizer_loaded:
+                logger.warning("No LLM tokenizer found")
+            
+            # Load model using safetensors - try multiple possible names
+            model_loaded = False
+            model_files = [
+                "model.safetensors",
+                "pytorch_model.bin",
+                "model.bin"
+            ]
+            
+            for model_file in model_files:
+                try:
+                    model_path = llm_path / model_file
+                    if model_path.exists():
+                        from safetensors.torch import load_file
+                        
+                        # Load model weights
+                        model_weights = load_file(str(model_path))
+                        logger.info(f"✅ Loaded LLM model weights with {len(model_weights)} parameters from {model_file}")
+                        
+                        # Create model wrapper
+                        self.model = torch.nn.Module()
+                        self.model.eval()
+                        self.model.to(self.device)
+                        
+                        model_loaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to load model {model_file}: {e}")
+            
+            if not model_loaded:
+                logger.warning("No LLM model file found")
+            
             self.is_initialized = True
             return True
                 
