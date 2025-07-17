@@ -41,16 +41,18 @@ logger.info(f"🚀 Starting MoshiAI Voice Assistant on {device}")
 class AudioBuffer:
     """Real-time audio buffer for streaming processing"""
     
-    def __init__(self, sample_rate: int = 16000, buffer_duration: float = 2.0):
+    def __init__(self, sample_rate: int = 16000, buffer_duration: float = 3.0):
         self.sample_rate = sample_rate
         self.buffer_size = int(sample_rate * buffer_duration)
         self.buffer = deque(maxlen=self.buffer_size)
         self.lock = threading.Lock()
+        self.total_samples = 0
         
     def add_audio(self, audio_data: np.ndarray):
         """Add audio data to buffer"""
         with self.lock:
             self.buffer.extend(audio_data)
+            self.total_samples += len(audio_data)
     
     def get_audio(self) -> np.ndarray:
         """Get current audio buffer as numpy array"""
@@ -59,10 +61,19 @@ class AudioBuffer:
                 return np.array([])
             return np.array(list(self.buffer))
     
+    def get_recent_audio(self, duration: float = 0.5) -> np.ndarray:
+        """Get recent audio data"""
+        samples = int(self.sample_rate * duration)
+        with self.lock:
+            if len(self.buffer) < samples:
+                return np.array(list(self.buffer))
+            return np.array(list(self.buffer)[-samples:])
+    
     def clear(self):
         """Clear the buffer"""
         with self.lock:
             self.buffer.clear()
+            self.total_samples = 0
 
 class MoshiAISystem:
     """Main system orchestrator with streaming support"""
@@ -106,25 +117,34 @@ class MoshiAISystem:
             "last_activity": time.time(),
             "is_processing": False,
             "last_transcription": "",
-            "conversation_history": []
+            "conversation_history": [],
+            "silence_start": None,
+            "audio_chunks_received": 0
         }
         self.active_sessions[session_id] = session
+        logger.info(f"🎯 Created new session: {session_id}")
         return session
     
     def remove_session(self, session_id: str):
         """Remove a session"""
         if session_id in self.active_sessions:
             del self.active_sessions[session_id]
+            logger.info(f"🗑️  Removed session: {session_id}")
     
     async def process_audio_stream(self, session_id: str, audio_data: np.ndarray) -> Optional[Dict[str, Any]]:
-        """Process streaming audio data"""
+        """Process streaming audio data with corrected logic"""
         if not self.is_ready or session_id not in self.active_sessions:
             return None
         
         session = self.active_sessions[session_id]
         
+        # Log audio reception
+        session["audio_chunks_received"] += 1
+        logger.debug(f"📥 Session {session_id}: Received audio chunk {session['audio_chunks_received']} with {len(audio_data)} samples")
+        
         # Prevent concurrent processing
         if session["is_processing"]:
+            logger.debug(f"⏳ Session {session_id}: Already processing, skipping chunk")
             return None
         
         try:
@@ -132,20 +152,56 @@ class MoshiAISystem:
             session["audio_buffer"].add_audio(audio_data)
             session["last_activity"] = time.time()
             
-            # Check if we have enough audio and voice activity
+            # Get buffered audio
             buffered_audio = session["audio_buffer"].get_audio()
             
-            if len(buffered_audio) < 8000:  # Need at least 0.5 seconds
+            # Need minimum audio length (0.3 seconds)
+            min_samples = int(16000 * 0.3)
+            if len(buffered_audio) < min_samples:
+                logger.debug(f"🔊 Session {session_id}: Buffer too small ({len(buffered_audio)} < {min_samples})")
                 return None
             
-            # Voice activity detection
-            if not detect_speech_activity(buffered_audio):
+            # Check for voice activity in the buffer
+            has_voice_activity = detect_speech_activity(buffered_audio)
+            
+            if not has_voice_activity:
+                logger.debug(f"🔇 Session {session_id}: No voice activity detected")
                 return None
             
-            # Check for silence (end of utterance)
-            recent_audio = buffered_audio[-8000:]  # Last 0.5 seconds
-            if not detect_speech_activity(recent_audio):
-                # End of utterance detected, process the audio
+            # CORRECTED LOGIC: Check for end of utterance
+            recent_audio = session["audio_buffer"].get_recent_audio(0.8)  # Last 0.8 seconds
+            recent_has_voice = detect_speech_activity(recent_audio)
+            
+            # If recent audio has no voice activity, consider it end of utterance
+            if not recent_has_voice:
+                if session["silence_start"] is None:
+                    session["silence_start"] = time.time()
+                    logger.debug(f"🤫 Session {session_id}: Silence detected, starting timer")
+                    return None
+                
+                # If silence persists for 0.5 seconds, process utterance
+                silence_duration = time.time() - session["silence_start"]
+                if silence_duration >= 0.5:
+                    logger.info(f"🎤 Session {session_id}: End of utterance detected, processing...")
+                    session["is_processing"] = True
+                    session["silence_start"] = None
+                    
+                    try:
+                        result = await self._process_complete_utterance(session, buffered_audio)
+                        session["audio_buffer"].clear()
+                        return result
+                    finally:
+                        session["is_processing"] = False
+                        
+            else:
+                # Reset silence timer if voice activity returns
+                if session["silence_start"] is not None:
+                    logger.debug(f"🔊 Session {session_id}: Voice activity resumed, resetting silence timer")
+                    session["silence_start"] = None
+            
+            # If buffer is getting too large, force processing
+            if len(buffered_audio) > 16000 * 10:  # 10 seconds max
+                logger.info(f"⚠️  Session {session_id}: Buffer full, force processing")
                 session["is_processing"] = True
                 
                 try:
@@ -158,25 +214,31 @@ class MoshiAISystem:
             return None
             
         except Exception as e:
-            logger.error(f"Audio stream processing error: {e}")
+            logger.error(f"❌ Audio stream processing error in session {session_id}: {e}")
             session["is_processing"] = False
             return None
     
     async def _process_complete_utterance(self, session: Dict[str, Any], audio_data: np.ndarray) -> Dict[str, Any]:
         """Process a complete utterance"""
         start_time = time.time()
+        session_id = session["id"]
         
         try:
+            logger.info(f"🎯 Processing utterance for session {session_id} with {len(audio_data)} samples")
+            
             # STT: Speech to Text
             stt_start = time.time()
             transcription = await self.stt_service.transcribe(audio_data)
             stt_time = time.time() - stt_start
+            
+            logger.info(f"📝 STT result for session {session_id}: '{transcription}' (took {stt_time:.2f}s)")
             
             if not transcription or len(transcription.strip()) < 1:
                 return {"error": "Could not transcribe audio"}
             
             # Avoid processing duplicate transcriptions
             if transcription == session["last_transcription"]:
+                logger.debug(f"🔄 Duplicate transcription detected for session {session_id}")
                 return {"error": "Duplicate transcription"}
             
             session["last_transcription"] = transcription
@@ -186,10 +248,14 @@ class MoshiAISystem:
             response_text = await self.llm_service.generate_response(transcription)
             llm_time = time.time() - llm_start
             
+            logger.info(f"🤖 LLM response for session {session_id}: '{response_text[:50]}...' (took {llm_time:.2f}s)")
+            
             # TTS: Text to Speech
             tts_start = time.time()
             response_audio = await self.tts_service.synthesize(response_text)
             tts_time = time.time() - tts_start
+            
+            logger.info(f"🔊 TTS generated {len(response_audio)} audio samples (took {tts_time:.2f}s)")
             
             total_time = time.time() - start_time
             
@@ -200,7 +266,7 @@ class MoshiAISystem:
                 "timestamp": time.time()
             })
             
-            logger.info(f"🎯 Pipeline completed in {total_time:.2f}s (STT: {stt_time:.2f}s, LLM: {llm_time:.2f}s, TTS: {tts_time:.2f}s)")
+            logger.info(f"🎯 Pipeline completed for session {session_id} in {total_time:.2f}s (STT: {stt_time:.2f}s, LLM: {llm_time:.2f}s, TTS: {tts_time:.2f}s)")
             
             return {
                 "transcription": transcription,
@@ -215,7 +281,7 @@ class MoshiAISystem:
             }
             
         except Exception as e:
-            logger.error(f"Utterance processing error: {e}")
+            logger.error(f"❌ Utterance processing error in session {session_id}: {e}")
             return {"error": "Processing failed"}
 
 # Initialize system
@@ -307,6 +373,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif data.get("type") == "reset":
                     session["audio_buffer"].clear()
                     session["last_transcription"] = ""
+                    session["silence_start"] = None
                     await websocket.send_json({"type": "reset_complete"})
                     
             except asyncio.TimeoutError:
