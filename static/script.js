@@ -11,6 +11,7 @@ class MoshiAIStreamingClient {
         this.maxReconnectAttempts = 5;
         this.audioBuffer = [];
         this.bufferSize = 4096;
+        this.audioChunksSent = 0;
         
         this.initializeElements();
         this.connectWebSocket();
@@ -57,7 +58,7 @@ class MoshiAIStreamingClient {
         if (timing) {
             const timingDiv = document.createElement('div');
             timingDiv.className = 'message-timing';
-            timingDiv.textContent = `${timing.total.toFixed(2)}s total (STT: ${timing.stt.toFixed(2)}s)`;
+            timingDiv.textContent = `${timing.total.toFixed(2)}s total (STT: ${timing.stt.toFixed(2)}s, LLM: ${timing.llm.toFixed(2)}s, TTS: ${timing.tts.toFixed(2)}s)`;
             messageDiv.appendChild(timingDiv);
         }
         
@@ -102,6 +103,7 @@ class MoshiAIStreamingClient {
             if (this.reconnectAttempts < this.maxReconnectAttempts) {
                 const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
                 this.reconnectAttempts++;
+                console.log(`Reconnecting in ${delay}ms...`);
                 setTimeout(() => this.connectWebSocket(), delay);
             }
         };
@@ -208,6 +210,7 @@ class MoshiAIStreamingClient {
                 };
                 
                 source.connect(this.processor);
+                console.log('✅ AudioWorklet initialized successfully');
                 
             } catch (workletError) {
                 console.warn('AudioWorklet not supported, falling back to ScriptProcessor');
@@ -228,12 +231,15 @@ class MoshiAIStreamingClient {
                 
                 source.connect(this.processor);
                 this.processor.connect(this.audioContext.destination);
+                console.log('✅ ScriptProcessor initialized successfully');
             }
             
             this.isRecording = true;
+            this.audioChunksSent = 0;
             this.startBtn.disabled = true;
             this.stopBtn.disabled = false;
             this.updateStatus('Recording...', 'recording');
+            console.log('🎤 Recording started');
             
         } catch (error) {
             console.error('Recording error:', error);
@@ -260,10 +266,15 @@ class MoshiAIStreamingClient {
     
     sendAudioData(audioData) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.audioChunksSent++;
+            console.log(`📤 Sending audio chunk ${this.audioChunksSent} with ${audioData.length} samples`);
+            
             this.ws.send(JSON.stringify({
                 type: 'audio',
                 audio: audioData
             }));
+        } else {
+            console.error('❌ WebSocket not connected, cannot send audio');
         }
     }
     
@@ -294,6 +305,7 @@ class MoshiAIStreamingClient {
         this.stopBtn.disabled = true;
         this.updateStatus('Connected', 'connected');
         this.audioLevelElement.textContent = '0%';
+        console.log(`🛑 Recording stopped. Sent ${this.audioChunksSent} audio chunks total`);
     }
     
     clearConversation() {
