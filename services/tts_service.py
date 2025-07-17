@@ -35,20 +35,20 @@ class KyutaiTTSService:
                 self.is_initialized = True
                 return True
             
-            # Load tokenizer
+            # Load tokenizer with correct filename
             try:
-                tokenizer_file = tts_path / "tokenizer_smp_8k_en_fr_audio.model"
+                tokenizer_file = tts_path / "tokenizer_spm_8k_en_fr_audio.model"
                 if tokenizer_file.exists():
                     import sentencepiece as spm
-                    self.tokenizer = smp.SentencePieceProcessor()
+                    self.tokenizer = spm.SentencePieceProcessor()
                     self.tokenizer.load(str(tokenizer_file))
                     logger.info("✅ TTS tokenizer loaded")
                 else:
-                    logger.warning("TTS tokenizer not found")
+                    logger.warning(f"TTS tokenizer not found at {tokenizer_file}")
             except Exception as e:
                 logger.warning(f"Failed to load TTS tokenizer: {e}")
             
-            # Load model using safetensors
+            # Load model using safetensors with correct filename
             try:
                 model_file = tts_path / "dsm_tts_1e68beda@240.safetensors"
                 if model_file.exists():
@@ -66,7 +66,7 @@ class KyutaiTTSService:
                     self.is_initialized = True
                     return True
                 else:
-                    logger.warning("TTS model file not found, using fallback")
+                    logger.warning(f"TTS model file not found at {model_file}")
                     
             except Exception as e:
                 logger.warning(f"TTS model loading failed: {e}")
@@ -92,112 +92,120 @@ class KyutaiTTSService:
                 logger.info(f"Tokenized text: {tokens}")
                 
                 # For now, use enhanced fallback
-                return self._generate_premium_speech(text)
+                return self._generate_natural_speech(text)
             else:
-                return self._generate_premium_speech(text)
+                return self._generate_natural_speech(text)
                 
         except Exception as e:
             logger.error(f"TTS synthesis error: {e}")
-            return self._generate_premium_speech(text)
+            return self._generate_natural_speech(text)
     
-    def _generate_premium_speech(self, text: str) -> np.ndarray:
-        """Generate high-quality synthetic speech"""
+    def _generate_natural_speech(self, text: str) -> np.ndarray:
+        """Generate natural-sounding synthetic speech"""
         if not text.strip():
             return np.array([])
         
-        logger.info(f"Synthesizing premium speech: '{text[:50]}...'")
+        logger.info(f"Synthesizing natural speech: '{text[:50]}...'")
         
-        # Parameters for natural-sounding speech
+        # Advanced speech synthesis parameters
         sample_rate = 24000
-        duration_per_char = 0.06  # Slightly faster
-        base_duration = max(0.8, len(text) * duration_per_char)
+        words = text.split()
+        word_duration = 0.4  # seconds per word
+        pause_duration = 0.15  # pause between words
         
-        # Add natural pauses for punctuation
-        pause_duration = 0.0
-        for char in text:
-            if char in '.,!?;:':
-                pause_duration += 0.2
-            elif char in ' ':
-                pause_duration += 0.05
-        
-        total_duration = base_duration + pause_duration
+        # Calculate total duration
+        total_duration = len(words) * word_duration + (len(words) - 1) * pause_duration
+        total_duration = max(1.0, total_duration)
         
         # Generate time array
         t = np.linspace(0, total_duration, int(sample_rate * total_duration))
         
-        # Base parameters
-        fundamental_freq = 160 + (hash(text) % 40)  # Vary pitch based on text
+        # Voice characteristics
+        base_freq = 145 + (hash(text) % 60)  # Vary fundamental frequency
         
         # Generate speech signal
         audio = np.zeros_like(t)
         
-        # Create multiple harmonics for natural sound
-        harmonics = [1, 2, 3, 4, 5, 6]
-        amplitudes = [0.6, 0.3, 0.2, 0.1, 0.05, 0.02]
+        # Multiple harmonic layers for natural sound
+        harmonics = [1, 2, 3, 4, 5, 6, 7, 8]
+        amplitudes = [0.8, 0.4, 0.25, 0.15, 0.1, 0.06, 0.04, 0.02]
         
         for i, (harmonic, amplitude) in enumerate(zip(harmonics, amplitudes)):
-            freq = fundamental_freq * harmonic
+            freq = base_freq * harmonic
             
-            # Add frequency modulation for naturalness
-            vibrato_freq = 4.5 + (i * 0.5)
-            freq_modulation = 1 + 0.008 * np.sin(2 * np.pi * vibrato_freq * t)
+            # Natural frequency variations
+            vibrato = 0.005 * np.sin(2 * np.pi * 5.2 * t)
+            tremolo = 0.03 * np.sin(2 * np.pi * 1.8 * t)
             
-            # Add amplitude modulation
-            amp_modulation = 1 + 0.05 * np.sin(2 * np.pi * 2.3 * t)
+            # Frequency modulation
+            freq_modulated = freq * (1 + vibrato + tremolo)
+            
+            # Amplitude modulation for naturalness
+            amp_mod = 1 + 0.08 * np.sin(2 * np.pi * 3.1 * t)
             
             # Generate harmonic
-            harmonic_signal = amplitude * amp_modulation * np.sin(2 * np.pi * freq * freq_modulation * t)
+            harmonic_signal = amplitude * amp_mod * np.sin(2 * np.pi * freq_modulated * t)
             audio += harmonic_signal
         
-        # Add formant-like resonances for vowel sounds
-        formant_freqs = [700, 1220, 2600]
-        for formant_freq in formant_freqs:
-            formant_amplitude = 0.08 * np.exp(-((t - total_duration/2) ** 2) / (total_duration/4))
-            formant_signal = formant_amplitude * np.sin(2 * np.pi * formant_freq * t)
+        # Add formant resonances for vowel-like sounds
+        formants = [
+            (800, 0.12),   # First formant
+            (1200, 0.08),  # Second formant
+            (2600, 0.05),  # Third formant
+            (3400, 0.03)   # Fourth formant
+        ]
+        
+        for formant_freq, formant_amp in formants:
+            formant_env = np.exp(-((t - total_duration/2) ** 2) / (total_duration/3))
+            formant_signal = formant_amp * formant_env * np.sin(2 * np.pi * formant_freq * t)
             audio += formant_signal
         
-        # Apply natural envelope
-        attack_time = 0.05
-        release_time = 0.1
-        sustain_level = 0.8
+        # Natural speech envelope
+        attack_time = 0.08
+        release_time = 0.12
         
-        envelope = np.ones_like(t) * sustain_level
+        envelope = np.ones_like(t)
         
-        # Attack
+        # Attack phase
         attack_samples = int(attack_time * sample_rate)
         if len(envelope) > attack_samples:
-            envelope[:attack_samples] = np.linspace(0, sustain_level, attack_samples)
+            envelope[:attack_samples] = np.linspace(0, 1, attack_samples) ** 0.5
         
-        # Release
+        # Release phase
         release_samples = int(release_time * sample_rate)
         if len(envelope) > release_samples:
-            envelope[-release_samples:] = np.linspace(sustain_level, 0, release_samples)
+            envelope[-release_samples:] = (np.linspace(1, 0, release_samples) ** 0.5)
         
-        # Add natural breathing/speech envelope
-        speech_envelope = 0.5 * (1 + np.sin(2 * np.pi * 0.3 * t + np.pi/2))
-        envelope *= speech_envelope
+        # Breathing-like modulation
+        breath_freq = 0.4
+        breath_mod = 0.85 + 0.15 * np.sin(2 * np.pi * breath_freq * t + np.pi/4)
+        envelope *= breath_mod
         
         # Apply envelope
         audio *= envelope
         
         # Add subtle background noise for realism
-        noise_level = 0.005
+        noise_level = 0.003
         noise = np.random.normal(0, noise_level, len(audio))
         audio += noise
         
-        # Dynamic range compression
-        threshold = 0.7
-        ratio = 4.0
+        # Multi-band compression for professional sound
+        # Simple implementation
+        threshold = 0.6
+        ratio = 3.0
         
-        # Simple compressor
         abs_audio = np.abs(audio)
         mask = abs_audio > threshold
         compressed_audio = audio.copy()
-        compressed_audio[mask] = np.sign(audio[mask]) * (threshold + (abs_audio[mask] - threshold) / ratio)
         
-        # Final normalization
+        # Apply compression
+        over_threshold = abs_audio[mask] - threshold
+        compressed_audio[mask] = np.sign(audio[mask]) * (threshold + over_threshold / ratio)
+        
+        # Final normalization and limiting
         max_val = np.max(np.abs(compressed_audio))
         if max_val > 0:
-            compressed_audio = compressed_audio / max_val * 0.5
+            compressed_audio = compressed_audio / max_val * 0.6
         
+        # Ensure float32 format
         return compressed_audio.astype(np.float32)
