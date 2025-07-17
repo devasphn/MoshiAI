@@ -39,57 +39,51 @@ models_dir = Path("./models")
 logger.info(f"🚀 Starting MoshiAI Voice Assistant on {device}")
 
 class AudioBuffer:
-    """Production-grade audio buffer with semantic VAD support"""
+    """Fixed audio buffer with proper VAD"""
     
-    def __init__(self, sample_rate: int = 16000, buffer_duration: float = 4.0):
+    def __init__(self, sample_rate: int = 16000, max_duration: float = 8.0):
         self.sample_rate = sample_rate
-        self.buffer_size = int(sample_rate * buffer_duration)
-        self.buffer = deque(maxlen=self.buffer_size)
+        self.max_samples = int(sample_rate * max_duration)
+        self.buffer = []
         self.lock = threading.Lock()
-        self.total_samples = 0
-        self.energy_history = deque(maxlen=20)  # Track energy levels
         
     def add_audio(self, audio_data: np.ndarray):
-        """Add audio data and compute energy"""
+        """Add audio data with size limits"""
         with self.lock:
             self.buffer.extend(audio_data)
-            self.total_samples += len(audio_data)
             
-            # Compute energy for this chunk
-            energy = np.mean(audio_data ** 2) if len(audio_data) > 0 else 0
-            self.energy_history.append(energy)
+            # Keep buffer within reasonable size
+            if len(self.buffer) > self.max_samples:
+                excess = len(self.buffer) - self.max_samples
+                self.buffer = self.buffer[excess:]
     
     def get_audio(self) -> np.ndarray:
-        """Get current audio buffer"""
+        """Get current buffer as numpy array"""
         with self.lock:
             if len(self.buffer) == 0:
                 return np.array([])
-            return np.array(list(self.buffer))
+            return np.array(self.buffer, dtype=np.float32)
     
-    def get_recent_audio(self, duration: float = 0.8) -> np.ndarray:
-        """Get recent audio for VAD analysis"""
+    def get_recent_audio(self, duration: float = 1.0) -> np.ndarray:
+        """Get recent audio for VAD"""
         samples = int(self.sample_rate * duration)
         with self.lock:
             if len(self.buffer) < samples:
-                return np.array(list(self.buffer))
-            return np.array(list(self.buffer)[-samples:])
-    
-    def get_energy_trend(self) -> float:
-        """Get average energy over recent history"""
-        with self.lock:
-            if len(self.energy_history) == 0:
-                return 0.0
-            return np.mean(list(self.energy_history))
+                return np.array(self.buffer, dtype=np.float32)
+            return np.array(self.buffer[-samples:], dtype=np.float32)
     
     def clear(self):
-        """Clear buffer and history"""
+        """Clear the buffer"""
         with self.lock:
             self.buffer.clear()
-            self.energy_history.clear()
-            self.total_samples = 0
+    
+    def get_length(self) -> int:
+        """Get buffer length"""
+        with self.lock:
+            return len(self.buffer)
 
 class MoshiAISystem:
-    """Production system orchestrator with semantic VAD"""
+    """Fixed system orchestrator"""
     
     def __init__(self):
         self.stt_service = KyutaiSTTService(device)
@@ -99,10 +93,9 @@ class MoshiAISystem:
         self.active_sessions = {}
         
     async def initialize(self):
-        """Initialize all services concurrently"""
+        """Initialize all services"""
         logger.info("🔄 Initializing MoshiAI system...")
         
-        # Initialize services in parallel
         results = await asyncio.gather(
             self.stt_service.initialize(models_dir),
             self.tts_service.initialize(models_dir),
@@ -122,7 +115,7 @@ class MoshiAISystem:
         logger.info(f"   LLM: {'✅' if llm_ok else '⚠️  (fallback)'}")
     
     def create_session(self, session_id: str) -> Dict[str, Any]:
-        """Create session with semantic VAD state"""
+        """Create session with fixed logic"""
         session = {
             "id": session_id,
             "audio_buffer": AudioBuffer(),
@@ -131,13 +124,11 @@ class MoshiAISystem:
             "last_transcription": "",
             "conversation_history": [],
             "silence_start": None,
-            "speech_start": None,
-            "audio_chunks_received": 0,
-            "vad_state": "silence",  # silence, speech, end_detected
-            "energy_threshold": 0.003  # Dynamic threshold
+            "speech_detected": False,
+            "processed_utterances": set()  # Track processed utterances
         }
         self.active_sessions[session_id] = session
-        logger.info(f"🎯 Created session with semantic VAD: {session_id}")
+        logger.info(f"🎯 Created session: {session_id}")
         return session
     
     def remove_session(self, session_id: str):
@@ -147,13 +138,12 @@ class MoshiAISystem:
             logger.info(f"🗑️  Removed session: {session_id}")
     
     async def process_audio_stream(self, session_id: str, audio_data: np.ndarray) -> Optional[Dict[str, Any]]:
-        """Process audio with semantic VAD (like unmute.sh)"""
+        """Fixed audio processing logic"""
         if not self.is_ready or session_id not in self.active_sessions:
             return None
         
         session = self.active_sessions[session_id]
         
-        # Prevent concurrent processing
         if session["is_processing"]:
             return None
         
@@ -161,80 +151,68 @@ class MoshiAISystem:
             # Add audio to buffer
             session["audio_buffer"].add_audio(audio_data)
             session["last_activity"] = time.time()
-            session["audio_chunks_received"] += 1
             
-            # Get buffered audio
+            # Get current buffer
             buffered_audio = session["audio_buffer"].get_audio()
+            buffer_length = len(buffered_audio)
             
-            # Need minimum audio for processing
-            min_samples = int(16000 * 0.4)  # 400ms minimum
-            if len(buffered_audio) < min_samples:
+            # Need minimum audio
+            min_samples = int(16000 * 0.5)  # 500ms minimum
+            if buffer_length < min_samples:
                 return None
             
-            # Semantic VAD state machine
-            current_energy = session["audio_buffer"].get_energy_trend()
-            has_voice = detect_speech_activity(buffered_audio, threshold=session["energy_threshold"])
+            # Voice activity detection
+            has_voice = detect_speech_activity(buffered_audio, threshold=0.002)
+            recent_audio = session["audio_buffer"].get_recent_audio(0.8)
+            recent_has_voice = detect_speech_activity(recent_audio, threshold=0.002)
             
-            # Update dynamic threshold
-            if current_energy > 0:
-                session["energy_threshold"] = 0.7 * session["energy_threshold"] + 0.3 * current_energy * 0.5
-            
-            # VAD state transitions
-            current_state = session["vad_state"]
-            
-            if current_state == "silence" and has_voice:
-                # Start of speech detected
-                session["vad_state"] = "speech"
-                session["speech_start"] = time.time()
+            # Speech state tracking
+            if has_voice and not session["speech_detected"]:
+                session["speech_detected"] = True
                 session["silence_start"] = None
                 logger.debug(f"🎤 Session {session_id}: Speech started")
                 
-            elif current_state == "speech" and not has_voice:
-                # Potential end of speech
+            elif session["speech_detected"] and not recent_has_voice:
                 if session["silence_start"] is None:
                     session["silence_start"] = time.time()
                     logger.debug(f"🤫 Session {session_id}: Silence detected")
                 
-                # Check silence duration for end-of-speech
+                # Check for end of speech
                 silence_duration = time.time() - session["silence_start"]
-                speech_duration = time.time() - (session["speech_start"] or time.time())
-                
-                # Semantic VAD: longer speech gets longer pause tolerance
-                if speech_duration < 2.0:
-                    required_silence = 0.6  # Short utterances need shorter pause
-                elif speech_duration < 4.0:
-                    required_silence = 0.8  # Medium utterances
-                else:
-                    required_silence = 1.0  # Long utterances get more tolerance
-                
-                if silence_duration >= required_silence:
-                    # End of speech confirmed
-                    session["vad_state"] = "end_detected"
-                    logger.info(f"🎯 Session {session_id}: End of speech detected (speech: {speech_duration:.1f}s, silence: {silence_duration:.1f}s)")
+                if silence_duration >= 0.8:  # 800ms silence = end of speech
+                    # Create unique utterance ID based on buffer content
+                    utterance_hash = hash(buffered_audio.tobytes())
                     
-                    session["is_processing"] = True
-                    try:
-                        result = await self._process_complete_utterance(session, buffered_audio)
-                        session["audio_buffer"].clear()
-                        session["vad_state"] = "silence"
-                        session["speech_start"] = None
-                        session["silence_start"] = None
-                        return result
-                    finally:
-                        session["is_processing"] = False
+                    if utterance_hash not in session["processed_utterances"]:
+                        logger.info(f"🎯 Session {session_id}: Processing new utterance ({buffer_length} samples)")
                         
-            elif current_state == "speech" and has_voice:
-                # Continue speech - reset silence timer
+                        session["is_processing"] = True
+                        session["processed_utterances"].add(utterance_hash)
+                        
+                        try:
+                            result = await self._process_complete_utterance(session, buffered_audio)
+                            session["audio_buffer"].clear()
+                            session["speech_detected"] = False
+                            session["silence_start"] = None
+                            return result
+                        finally:
+                            session["is_processing"] = False
+                    else:
+                        logger.debug(f"🔄 Session {session_id}: Duplicate utterance detected, skipping")
+                        
+            elif session["speech_detected"] and recent_has_voice:
+                # Reset silence timer if voice returns
                 session["silence_start"] = None
-                
+            
             # Force processing if buffer gets too large
-            if len(buffered_audio) > 16000 * 12:  # 12 seconds max
-                logger.info(f"⚠️  Session {session_id}: Force processing due to buffer size")
+            max_samples = int(16000 * 10)  # 10 seconds max
+            if buffer_length > max_samples:
+                logger.info(f"⚠️  Session {session_id}: Force processing large buffer")
                 session["is_processing"] = True
                 try:
                     result = await self._process_complete_utterance(session, buffered_audio)
                     session["audio_buffer"].clear()
-                    session["vad_state"] = "silence"
+                    session["speech_detected"] = False
                     return result
                 finally:
                     session["is_processing"] = False
@@ -247,25 +225,24 @@ class MoshiAISystem:
             return None
     
     async def _process_complete_utterance(self, session: Dict[str, Any], audio_data: np.ndarray) -> Dict[str, Any]:
-        """Process complete utterance through the pipeline"""
+        """Process utterance with real models"""
         start_time = time.time()
         session_id = session["id"]
         
         try:
-            logger.info(f"🎯 Processing utterance for session {session_id} ({len(audio_data)} samples)")
-            
-            # STT with flush trick (like unmute.sh)
+            # STT with real model
             stt_start = time.time()
             transcription = await self.stt_service.transcribe(audio_data)
             stt_time = time.time() - stt_start
             
-            logger.info(f"📝 STT: '{transcription}' ({stt_time:.2f}s)")
+            logger.info(f"📝 STT result: '{transcription}' ({stt_time:.2f}s)")
             
             if not transcription or len(transcription.strip()) < 1:
                 return {"error": "Could not transcribe audio"}
             
-            # Avoid duplicate processing
+            # Skip if same as last transcription
             if transcription == session["last_transcription"]:
+                logger.debug(f"🔄 Duplicate transcription skipped")
                 return {"error": "Duplicate transcription"}
             
             session["last_transcription"] = transcription
@@ -275,14 +252,14 @@ class MoshiAISystem:
             response_text = await self.llm_service.generate_response(transcription)
             llm_time = time.time() - llm_start
             
-            logger.info(f"🤖 LLM: '{response_text[:50]}...' ({llm_time:.2f}s)")
+            logger.info(f"🤖 LLM response: '{response_text[:50]}...' ({llm_time:.2f}s)")
             
-            # TTS synthesis (streaming like unmute.sh)
+            # TTS synthesis
             tts_start = time.time()
             response_audio = await self.tts_service.synthesize(response_text)
             tts_time = time.time() - tts_start
             
-            logger.info(f"🔊 TTS: {len(response_audio)} samples ({tts_time:.2f}s)")
+            logger.info(f"🔊 TTS generated {len(response_audio)} samples ({tts_time:.2f}s)")
             
             total_time = time.time() - start_time
             
@@ -316,20 +293,19 @@ moshi_system = MoshiAISystem()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle management"""
+    """Application lifecycle"""
     await moshi_system.initialize()
     yield
     logger.info("🛑 MoshiAI shutting down")
 
-# Create FastAPI application
+# Create FastAPI app
 app = FastAPI(
     title="MoshiAI Voice Assistant",
-    description="Production-ready voice assistant using Kyutai architecture",
+    description="Production-ready voice assistant",
     version="1.0.0",
     lifespan=lifespan
 )
 
-# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -338,18 +314,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files and templates
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def get_index(request: Request):
-    """Serve main interface"""
     return templates.TemplateResponse("index.html", {"request": request})
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
         "device": str(device),
@@ -364,7 +337,7 @@ async def health_check():
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time communication"""
+    """WebSocket with fixed logic"""
     await websocket.accept()
     session_id = str(uuid.uuid4())[:8]
     session = moshi_system.create_session(session_id)
@@ -372,7 +345,6 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info(f"🔌 New session: {session_id}")
     
     try:
-        # Send connection confirmation
         await websocket.send_json({
             "type": "connection",
             "session_id": session_id,
@@ -397,7 +369,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif data.get("type") == "reset":
                     session["audio_buffer"].clear()
                     session["last_transcription"] = ""
-                    session["vad_state"] = "silence"
+                    session["speech_detected"] = False
+                    session["processed_utterances"].clear()
                     await websocket.send_json({"type": "reset_complete"})
                     
             except asyncio.TimeoutError:
@@ -412,10 +385,8 @@ async def websocket_endpoint(websocket: WebSocket):
         moshi_system.remove_session(session_id)
 
 if __name__ == "__main__":
-    # Auto-detect port for RunPod
     port = int(os.environ.get("PORT", 8000))
     
-    # RunPod URL detection
     if "RUNPOD_POD_ID" in os.environ:
         pod_id = os.environ["RUNPOD_POD_ID"]
         logger.info(f"🌐 RunPod URL: https://{pod_id}-{port}.proxy.runpod.net")
