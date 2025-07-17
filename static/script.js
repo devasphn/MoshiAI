@@ -1,11 +1,16 @@
-class MoshiAIClient {
+class MoshiAIStreamingClient {
     constructor() {
         this.ws = null;
         this.audioContext = null;
         this.mediaStream = null;
-        this.scriptProcessor = null;
+        this.processor = null;
         this.isRecording = false;
         this.isConnected = false;
+        this.sessionId = null;
+        this.reconnectAttempts = 0;
+        this.maxReconnectAttempts = 5;
+        this.audioBuffer = [];
+        this.bufferSize = 4096;
         
         this.initializeElements();
         this.connectWebSocket();
@@ -24,6 +29,14 @@ class MoshiAIClient {
         this.startBtn.addEventListener('click', () => this.startRecording());
         this.stopBtn.addEventListener('click', () => this.stopRecording());
         this.clearBtn.addEventListener('click', () => this.clearConversation());
+        
+        // Add reconnection button
+        this.reconnectBtn = document.createElement('button');
+        this.reconnectBtn.textContent = '🔄 Reconnect';
+        this.reconnectBtn.className = 'btn btn-info';
+        this.reconnectBtn.style.display = 'none';
+        this.reconnectBtn.addEventListener('click', () => this.connectWebSocket());
+        this.clearBtn.parentNode.appendChild(this.reconnectBtn);
     }
     
     updateStatus(message, type = 'info') {
@@ -44,7 +57,7 @@ class MoshiAIClient {
         if (timing) {
             const timingDiv = document.createElement('div');
             timingDiv.className = 'message-timing';
-            timingDiv.textContent = `${timing.total.toFixed(2)}s total`;
+            timingDiv.textContent = `${timing.total.toFixed(2)}s total (STT: ${timing.stt.toFixed(2)}s)`;
             messageDiv.appendChild(timingDiv);
         }
         
@@ -53,18 +66,24 @@ class MoshiAIClient {
     }
     
     connectWebSocket() {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            return;
+        }
+        
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
         
         this.updateStatus('Connecting...', 'connecting');
+        this.reconnectBtn.style.display = 'none';
         
         this.ws = new WebSocket(wsUrl);
         
         this.ws.onopen = () => {
             this.isConnected = true;
+            this.reconnectAttempts = 0;
             this.updateStatus('Connected', 'connected');
             this.startBtn.disabled = false;
-            this.addMessage('Connected to MoshiAI. You can start talking!', 'system');
+            this.addMessage('Connected to MoshiAI Streaming. You can start talking!', 'system');
         };
         
         this.ws.onmessage = (event) => {
@@ -77,20 +96,44 @@ class MoshiAIClient {
             this.updateStatus('Disconnected', 'error');
             this.startBtn.disabled = true;
             this.stopBtn.disabled = true;
+            this.reconnectBtn.style.display = 'inline-block';
             
-            // Reconnect after delay
-            setTimeout(() => this.connectWebSocket(), 3000);
+            // Auto-reconnect with exponential backoff
+            if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 30000);
+                this.reconnectAttempts++;
+                setTimeout(() => this.connectWebSocket(), delay);
+            }
         };
         
         this.ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             this.updateStatus('Connection error', 'error');
         };
+        
+        // Setup ping/pong for keepalive
+        setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 25000);
     }
     
     handleMessage(data) {
+        if (data.type === 'connection') {
+            this.sessionId = data.session_id;
+            console.log('Session ID:', this.sessionId);
+            return;
+        }
+        
+        if (data.type === 'keepalive' || data.type === 'pong') {
+            return;
+        }
+        
         if (data.error) {
-            this.addMessage(`Error: ${data.error}`, 'system');
+            if (data.error !== 'Could not transcribe audio' && data.error !== 'Duplicate transcription') {
+                this.addMessage(`Error: ${data.error}`, 'system');
+            }
             return;
         }
         
@@ -153,30 +196,39 @@ class MoshiAIClient {
             });
             
             const source = this.audioContext.createMediaStreamSource(this.mediaStream);
-            this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
             
-            this.scriptProcessor.onaudioprocess = (event) => {
-                if (!this.isRecording) return;
+            // Use AudioWorklet for better performance
+            try {
+                await this.audioContext.audioWorklet.addModule('/static/audio-worklet.js');
+                this.processor = new AudioWorkletNode(this.audioContext, 'audio-processor');
                 
-                const inputData = event.inputBuffer.getChannelData(0);
+                this.processor.port.onmessage = (event) => {
+                    const { audioData, level } = event.data;
+                    this.handleAudioData(audioData, level);
+                };
                 
-                // Calculate audio level
-                const level = Math.sqrt(
-                    inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length
-                );
-                this.audioLevelElement.textContent = `${Math.round(level * 100)}%`;
+                source.connect(this.processor);
                 
-                // Send audio data
-                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                    this.ws.send(JSON.stringify({
-                        type: 'audio',
-                        audio: Array.from(inputData)
-                    }));
-                }
-            };
-            
-            source.connect(this.scriptProcessor);
-            this.scriptProcessor.connect(this.audioContext.destination);
+            } catch (workletError) {
+                console.warn('AudioWorklet not supported, falling back to ScriptProcessor');
+                
+                // Fallback to ScriptProcessor
+                this.processor = this.audioContext.createScriptProcessor(this.bufferSize, 1, 1);
+                
+                this.processor.onaudioprocess = (event) => {
+                    if (!this.isRecording) return;
+                    
+                    const inputData = event.inputBuffer.getChannelData(0);
+                    const level = Math.sqrt(
+                        inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length
+                    );
+                    
+                    this.handleAudioData(Array.from(inputData), level);
+                };
+                
+                source.connect(this.processor);
+                this.processor.connect(this.audioContext.destination);
+            }
             
             this.isRecording = true;
             this.startBtn.disabled = true;
@@ -190,17 +242,48 @@ class MoshiAIClient {
         }
     }
     
+    handleAudioData(audioData, level) {
+        if (!this.isRecording) return;
+        
+        // Update audio level display
+        this.audioLevelElement.textContent = `${Math.round(level * 100)}%`;
+        
+        // Buffer audio data
+        this.audioBuffer.push(...audioData);
+        
+        // Send buffered audio when we have enough data
+        if (this.audioBuffer.length >= this.bufferSize) {
+            this.sendAudioData(this.audioBuffer);
+            this.audioBuffer = [];
+        }
+    }
+    
+    sendAudioData(audioData) {
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({
+                type: 'audio',
+                audio: audioData
+            }));
+        }
+    }
+    
     stopRecording() {
         if (!this.isRecording) return;
         
         this.isRecording = false;
         
+        // Send remaining buffered audio
+        if (this.audioBuffer.length > 0) {
+            this.sendAudioData(this.audioBuffer);
+            this.audioBuffer = [];
+        }
+        
         if (this.mediaStream) {
             this.mediaStream.getTracks().forEach(track => track.stop());
         }
         
-        if (this.scriptProcessor) {
-            this.scriptProcessor.disconnect();
+        if (this.processor) {
+            this.processor.disconnect();
         }
         
         if (this.audioContext) {
@@ -217,10 +300,15 @@ class MoshiAIClient {
         this.conversationDiv.innerHTML = '';
         this.responseTimeElement.textContent = '-';
         this.addMessage('Conversation cleared', 'system');
+        
+        // Reset server-side session
+        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify({ type: 'reset' }));
+        }
     }
 }
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-    new MoshiAIClient();
+    new MoshiAIStreamingClient();
 });
