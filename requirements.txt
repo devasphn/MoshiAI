@@ -14,5 +14,6 @@ safetensors>=0.4.0
 accelerate>=0.24.0
 jinja2>=3.1.0
 python-multipart>=0.0.6
-moshi==0.2.10
-git+https://github.com/huggingface/transformers.git
+# Official Kyutai packages
+git+https://github.com/kyutai-labs/delayed-streams-modeling.git
+git+https://github.com/kyutai-labs/moshi.git
