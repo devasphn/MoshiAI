@@ -54,7 +54,7 @@ class KyutaiSTTService:
             # Load tokenizer
             tokenizer_file = model_dir / "tokenizer_en_fr_audio_8000.model"
             if tokenizer_file.exists():
-                self.tokenizer = smp.SentencePieceProcessor()
+                self.tokenizer = spm.SentencePieceProcessor()
                 self.tokenizer.load(str(tokenizer_file))
             
             # Load STT model weights
