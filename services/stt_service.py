@@ -22,31 +22,44 @@ class KyutaiSTTService:
         try:
             logger.info("Initializing Kyutai STT Service...")
             
-            # Find model directory
-            model_dir = models_dir / "stt"
+            # Find the actual snapshot directory
+            model_dir = models_dir / "stt" / "models--kyutai--stt-1b-en_fr" / "snapshots"
             stt_path = None
             
-            for path in model_dir.rglob("*"):
-                if "snapshots" in str(path) and path.is_dir():
-                    stt_path = path
-                    break
+            # Find the actual snapshot directory (it will be a hash)
+            if model_dir.exists():
+                snapshot_dirs = [d for d in model_dir.iterdir() if d.is_dir()]
+                if snapshot_dirs:
+                    stt_path = snapshot_dirs[0]  # Use the first (and likely only) snapshot
+                    logger.info(f"Found STT snapshot directory: {stt_path}")
             
             if not stt_path:
                 logger.error("STT model directory not found")
                 return await self._initialize_fallback()
             
-            # Load tokenizer with correct filename
-            try:
-                tokenizer_file = stt_path / "tokenizer_en_fr_audio_8000.model"
-                if tokenizer_file.exists():
-                    import sentencepiece as spm
-                    self.tokenizer = spm.SentencePieceProcessor()
-                    self.tokenizer.load(str(tokenizer_file))
-                    logger.info("✅ STT tokenizer loaded")
-                else:
-                    logger.warning(f"STT tokenizer not found at {tokenizer_file}")
-            except Exception as e:
-                logger.warning(f"Failed to load tokenizer: {e}")
+            # Load tokenizer - try multiple possible names
+            tokenizer_loaded = False
+            tokenizer_files = [
+                "tokenizer_en_fr_audio_8000.model",
+                "tokenizer_spm_8k_en_fr_audio.model",
+                "tokenizer.model"
+            ]
+            
+            for tokenizer_file in tokenizer_files:
+                try:
+                    tokenizer_path = stt_path / tokenizer_file
+                    if tokenizer_path.exists():
+                        import sentencepiece as spm
+                        self.tokenizer = spm.SentencePieceProcessor()
+                        self.tokenizer.load(str(tokenizer_path))
+                        logger.info(f"✅ STT tokenizer loaded from {tokenizer_file}")
+                        tokenizer_loaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to load tokenizer {tokenizer_file}: {e}")
+            
+            if not tokenizer_loaded:
+                logger.warning("No STT tokenizer found")
             
             # Try to load with transformers first
             try:
@@ -76,7 +89,7 @@ class KyutaiSTTService:
                     
                     # Load model weights
                     model_weights = load_file(str(model_file))
-                    logger.info(f"✅ Loaded model weights with {len(model_weights)} parameters")
+                    logger.info(f"✅ Loaded STT model weights with {len(model_weights)} parameters")
                     
                     # Create a wrapper for the model
                     self.model = torch.nn.Module()
@@ -86,7 +99,7 @@ class KyutaiSTTService:
                     self.is_initialized = True
                     return True
                 else:
-                    logger.warning("STT model file not found")
+                    logger.warning(f"STT model file not found at {model_file}")
                     
             except Exception as e:
                 logger.warning(f"Direct loading failed: {e}")
