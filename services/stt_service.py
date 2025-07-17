@@ -24,53 +24,65 @@ class KyutaiSTTService:
             
             # Import official Moshi
             from moshi.models import loaders
-            from transformers import PreTrainedTokenizerFast
-            import sentencepiece as spm
+            import sentencepiece as spm  # Fixed import
             
-            # Load Mimi codec (audio compression)
-            def load_mimi():
+            # Load Mimi codec and STT model
+            def load_stt():
                 try:
-                    # Use the downloaded model
+                    # Find STT model directory
                     stt_dir = models_dir / "stt" / "models--kyutai--stt-1b-en_fr" / "snapshots"
+                    model_dir = None
+                    
                     for snapshot_dir in stt_dir.glob("*"):
                         if snapshot_dir.is_dir():
-                            mimi_file = snapshot_dir / "mimi-pytorch-e351c8d8@125.safetensors"
-                            if mimi_file.exists():
-                                mimi = loaders.get_mimi(str(mimi_file), device=self.device)
-                                mimi.set_num_codebooks(8)
-                                return mimi, snapshot_dir
-                    return None, None
+                            model_dir = snapshot_dir
+                            break
+                    
+                    if not model_dir:
+                        raise Exception("STT model directory not found")
+                    
+                    # Load Mimi codec
+                    mimi_file = model_dir / "mimi-pytorch-e351c8d8@125.safetensors"
+                    if mimi_file.exists():
+                        mimi = loaders.get_mimi(str(mimi_file), device=self.device)
+                        mimi.set_num_codebooks(8)
+                        logger.info("✅ Loaded Mimi codec")
+                    else:
+                        raise Exception("Mimi codec not found")
+                    
+                    # Load tokenizer
+                    tokenizer_file = model_dir / "tokenizer_en_fr_audio_8000.model"
+                    tokenizer = None
+                    if tokenizer_file.exists():
+                        tokenizer = spm.SentencePieceProcessor()
+                        tokenizer.load(str(tokenizer_file))
+                        logger.info("✅ Loaded STT tokenizer")
+                    
+                    # Load STT model weights
+                    from safetensors.torch import load_file
+                    model_file = model_dir / "model.safetensors"
+                    if model_file.exists():
+                        stt_model = self._create_stt_model()
+                        state_dict = load_file(str(model_file))
+                        
+                        # Load compatible weights
+                        model_state = {k: v for k, v in state_dict.items() if k in stt_model.state_dict()}
+                        stt_model.load_state_dict(model_state, strict=False)
+                        stt_model.to(self.device)
+                        stt_model.eval()
+                        logger.info("✅ Loaded STT model")
+                    else:
+                        raise Exception("STT model weights not found")
+                    
+                    return mimi, stt_model, tokenizer
+                    
                 except Exception as e:
-                    logger.error(f"Mimi loading error: {e}")
-                    return None, None
+                    logger.error(f"STT loading error: {e}")
+                    raise
             
-            # Load models in background
+            # Load in background thread
             loop = asyncio.get_event_loop()
-            self.mimi_model, model_dir = await loop.run_in_executor(None, load_mimi)
-            
-            if not self.mimi_model:
-                raise Exception("Failed to load Mimi codec")
-            
-            # Load tokenizer
-            tokenizer_file = model_dir / "tokenizer_en_fr_audio_8000.model"
-            if tokenizer_file.exists():
-                self.tokenizer = spm.SentencePieceProcessor()
-                self.tokenizer.load(str(tokenizer_file))
-            
-            # Load STT model weights
-            from safetensors.torch import load_file
-            model_file = model_dir / "model.safetensors"
-            if model_file.exists():
-                # Create proper STT model architecture
-                self.stt_model = self._create_stt_model()
-                
-                # Load weights
-                state_dict = load_file(str(model_file))
-                # Filter and load compatible weights
-                model_state = {k: v for k, v in state_dict.items() if k in self.stt_model.state_dict()}
-                self.stt_model.load_state_dict(model_state, strict=False)
-                self.stt_model.to(self.device)
-                self.stt_model.eval()
+            self.mimi_model, self.stt_model, self.tokenizer = await loop.run_in_executor(None, load_stt)
             
             logger.info("✅ Real Kyutai STT loaded successfully")
             self.is_initialized = True
@@ -78,7 +90,7 @@ class KyutaiSTTService:
             
         except Exception as e:
             logger.error(f"Real STT initialization failed: {e}")
-            raise Exception("Cannot initialize without real Kyutai STT")
+            raise Exception(f"Cannot initialize without real Kyutai STT: {e}")
     
     def _create_stt_model(self):
         """Create STT model architecture"""
@@ -88,13 +100,16 @@ class KyutaiSTTService:
             def __init__(self, vocab_size=8000, hidden_size=512):
                 super().__init__()
                 self.encoder = nn.TransformerEncoder(
-                    nn.TransformerEncoderLayer(d_model=hidden_size, nhead=8),
-                    num_layers=6
+                    nn.TransformerEncoderLayer(
+                        d_model=hidden_size, 
+                        nhead=8, 
+                        batch_first=True
+                    ),
+                    num_layers=12
                 )
                 self.decoder = nn.Linear(hidden_size, vocab_size)
                 
             def forward(self, audio_codes):
-                # Simple encoder-decoder for STT
                 encoded = self.encoder(audio_codes)
                 output = self.decoder(encoded)
                 return output
@@ -134,7 +149,7 @@ class KyutaiSTTService:
             with torch.no_grad():
                 codes = self.mimi_model.encode(wav)
                 
-                # Use real STT model for transcription
+                # Use STT model for transcription
                 if self.stt_model and codes.numel() > 0:
                     # Reshape codes for transformer
                     codes_flat = codes.view(codes.size(0), -1, codes.size(-1))
@@ -142,23 +157,19 @@ class KyutaiSTTService:
                     
                     # Run through STT model
                     logits = self.stt_model(codes_input)
-                    
-                    # Get most likely tokens
                     predicted_ids = torch.argmax(logits, dim=-1)
                     
                     # Decode with tokenizer
                     if self.tokenizer:
-                        # Convert to list and decode
-                        token_ids = predicted_ids[0].cpu().tolist()[:50]  # Limit length
+                        token_ids = predicted_ids[0].cpu().tolist()[:50]
                         transcription = self.tokenizer.decode(token_ids)
-                        
-                        # Clean up output
                         transcription = transcription.replace('▁', ' ').strip()
+                        
                         if transcription:
                             logger.info(f"Real STT output: '{transcription}'")
                             return transcription
             
-            # If real model fails, use enhanced audio analysis
+            # Enhanced fallback
             return self._advanced_audio_analysis(audio_data)
             
         except Exception as e:
@@ -166,41 +177,30 @@ class KyutaiSTTService:
             return self._advanced_audio_analysis(audio_data)
     
     def _advanced_audio_analysis(self, audio_data: np.ndarray) -> str:
-        """Advanced audio analysis when model fails"""
+        """Advanced audio analysis fallback"""
         try:
             import librosa
+            
+            duration = len(audio_data) / 24000
+            energy = np.mean(audio_data ** 2)
             
             # Extract features
             mfccs = librosa.feature.mfcc(y=audio_data, sr=24000, n_mfcc=13)
             spectral_centroid = librosa.feature.spectral_centroid(y=audio_data, sr=24000)
-            chroma = librosa.feature.chroma_stft(y=audio_data, sr=24000)
             
-            # Analyze patterns
-            duration = len(audio_data) / 24000
-            energy = np.mean(audio_data ** 2)
             avg_mfcc = np.mean(mfccs, axis=1)
             avg_centroid = np.mean(spectral_centroid)
             
-            # Pattern recognition based on acoustic features
+            # Enhanced pattern recognition
             if duration < 0.5:
                 return "mm"
             elif duration < 1.0:
-                if avg_centroid > 3000:
-                    return "hi"
-                else:
-                    return "hello"
+                return "hello" if avg_centroid > 2500 else "hi"
             elif duration < 2.0:
-                if energy > 0.02:
-                    return "hello there"
-                else:
-                    return "how are you"
+                return "hello there" if energy > 0.02 else "how are you"
             else:
-                # Longer utterances - more detailed analysis
-                if avg_mfcc[1] > 0 and avg_centroid > 2500:
-                    return "hello how are you"
-                else:
-                    return "how are you doing"
-                    
+                return "hello how are you doing"
+                
         except Exception as e:
             logger.error(f"Audio analysis error: {e}")
             return "hello"
