@@ -3,232 +3,52 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Unmute Voice Assistant</title>
+    <title>MoshiAI Voice Assistant</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>🎙️ Unmute Voice Assistant</h1>
-            <p>Real-time STT → LLM → TTS Pipeline</p>
+            <h1>🎙️ MoshiAI Voice Assistant</h1>
+            <p>Production-ready Speech-to-Speech AI using Kyutai Models</p>
         </header>
 
-        <main>
-            <div class="status-panel">
-                <div class="status-item">
-                    <span class="status-label">Status:</span>
-                    <span id="connection-status" class="status-value">Initializing...</span>
-                </div>
-                <div class="status-item">
-                    <span class="status-label">Live Audio Level:</span>
-                    <span id="audio-level" class="status-value">0%</span>
-                </div>
+        <div class="status-panel">
+            <div class="status-item">
+                <div class="status-label">Connection Status</div>
+                <div id="status" class="status">Initializing...</div>
             </div>
-
-            <div class="chat-container">
-                <div id="conversation" class="conversation">
-                    <!-- Messages will be added here -->
-                </div>
+            <div class="status-item">
+                <div class="status-label">Audio Level</div>
+                <div id="audio-level" class="metric-value">0%</div>
             </div>
-
-            <div class="controls">
-                <div class="voice-controls">
-                    <button id="start-btn" class="btn btn-primary" disabled>🎤 Start Talking</button>
-                    <button id="stop-btn" class="btn btn-secondary" disabled>⏹️ Stop</button>
-                </div>
-                 <div class="advanced-controls">
-                    <button id="clear-btn" class="btn btn-info">🗑️ Clear Chat</button>
-                </div>
+            <div class="status-item">
+                <div class="status-label">Response Time</div>
+                <div id="response-time" class="metric-value">-</div>
             </div>
-        </main>
+        </div>
 
-        <footer>
-            <p>Powered by Kyutai & Moshi</p>
-        </footer>
+        <div class="chat-container">
+            <div id="conversation"></div>
+        </div>
+
+        <div class="controls">
+            <div class="voice-controls">
+                <button id="start-btn" class="btn btn-primary" disabled>
+                    🎤 Start Talking
+                </button>
+                <button id="stop-btn" class="btn btn-secondary" disabled>
+                    ⏹️ Stop Recording
+                </button>
+            </div>
+            <div class="metrics">
+                <button id="clear-btn" class="btn btn-info">
+                    🗑️ Clear Chat
+                </button>
+            </div>
+        </div>
     </div>
+
     <script src="/static/script.js"></script>
 </body>
-</html>```
-
-#### **2. `static/script.js` (Updated)**
-
-This version is much better at handling errors and providing you with feedback directly on the page.
-
-```javascript
-document.addEventListener('DOMContentLoaded', () => {
-    // --- DOM Elements ---
-    const startBtn = document.getElementById('start-btn');
-    const stopBtn = document.getElementById('stop-btn');
-    const clearBtn = document.getElementById('clear-btn');
-    const statusElement = document.getElementById('connection-status');
-    const conversationDiv = document.getElementById('conversation');
-    const audioLevelElement = document.getElementById('audio-level');
-
-    // --- State Variables ---
-    let ws;
-    let audioContext;
-    let scriptProcessor;
-    let mediaStream;
-    let isRecording = false;
-
-    // --- Core Functions ---
-
-    function updateStatus(status, className = 'disconnected') {
-        statusElement.textContent = status;
-        statusElement.className = `status-value ${className}`;
-        console.log(`[Status] ${status}`);
-    }
-
-    function addMessage(text, sender) {
-        const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${sender}`;
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'message-content';
-        contentDiv.textContent = text;
-        messageDiv.appendChild(contentDiv);
-        conversationDiv.appendChild(messageDiv);
-        conversationDiv.scrollTop = conversationDiv.scrollHeight;
-    }
-    
-    function connectWebSocket() {
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
-        
-        updateStatus('Connecting...');
-        console.log(`[WebSocket] Attempting to connect to ${wsUrl}`);
-        
-        try {
-            ws = new WebSocket(wsUrl);
-        } catch (error) {
-            console.error('[WebSocket] Instantiation failed:', error);
-            addMessage(`WebSocket Error: Could not create connection. Check browser compatibility.`, 'system');
-            updateStatus('Connection Failed', 'error');
-            return;
-        }
-
-        ws.onopen = () => {
-            updateStatus('Connected', 'connected');
-            startBtn.disabled = false;
-            addMessage('Connection established. You can now start talking.', 'system');
-        };
-
-        ws.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-                handleWebSocketMessage(data);
-            } catch (e) {
-                console.error('[WebSocket] Error parsing message:', e);
-            }
-        };
-
-        ws.onclose = (event) => {
-            updateStatus('Disconnected', 'disconnected');
-            startBtn.disabled = true;
-            stopBtn.disabled = true;
-            if (event.code !== 1000) { // If not a clean close
-                const reason = `Connection closed unexpectedly (Code: ${event.code}). Retrying in 3 seconds...`;
-                console.warn(`[WebSocket] ${reason}`);
-                addMessage(reason, 'system');
-                setTimeout(connectWebSocket, 3000);
-            }
-        };
-
-        ws.onerror = (error) => {
-            console.error('[WebSocket] Error:', error);
-            updateStatus('Connection Error', 'error');
-            addMessage('A WebSocket connection error occurred. Please check the server logs and browser console.', 'system');
-        };
-    }
-
-    function handleWebSocketMessage(data) {
-        if (data.error) {
-            addMessage(`Server warning: ${data.error}`, 'system');
-            return;
-        }
-
-        if (data.transcription) {
-            addMessage(data.transcription, 'user');
-        }
-
-        if (data.response_text) {
-            addMessage(data.response_text, 'assistant');
-            if (data.response_audio && data.response_audio.length > 0) {
-                playAudio(data.response_audio);
-            }
-        }
-    }
-    
-    async function playAudio(audioArray) {
-        if (!audioContext) return;
-        try {
-            const audioBuffer = audioContext.createBuffer(1, audioArray.length, 24000);
-            audioBuffer.getChannelData(0).set(audioArray);
-            const source = audioContext.createBufferSource();
-            source.buffer = audioBuffer;
-            source.connect(audioContext.destination);
-            source.start();
-        } catch (e) {
-            console.error('[Audio] Playback failed:', e);
-            addMessage('Error playing audio response.', 'system');
-        }
-    }
-
-    async function startRecording() {
-        if (isRecording) return;
-        try {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            if (audioContext.state === 'suspended') await audioContext.resume();
-
-            mediaStream = await navigator.mediaDevices.getUserMedia({ audio: { sampleRate: 16000, channelCount: 1 } });
-            
-            const source = audioContext.createMediaStreamSource(mediaStream);
-            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-
-            scriptProcessor.onaudioprocess = (event) => {
-                if (!isRecording || !ws || ws.readyState !== WebSocket.OPEN) return;
-                const inputData = event.inputBuffer.getChannelData(0);
-                ws.send(JSON.stringify({ type: 'audio', audio: Array.from(inputData) }));
-                
-                const level = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
-                audioLevelElement.textContent = `${Math.round(level * 100)}%`;
-            };
-            
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContext.destination);
-
-            isRecording = true;
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-            updateStatus('Recording...', 'recording');
-        } catch (error) {
-            console.error('[Recording] Failed to start:', error);
-            addMessage(`Microphone Error: ${error.message}. Please allow microphone access and refresh.`, 'system');
-            updateStatus('Mic Error', 'error');
-        }
-    }
-
-    function stopRecording() {
-        if (!isRecording) return;
-        isRecording = false;
-        mediaStream?.getTracks().forEach(track => track.stop());
-        scriptProcessor?.disconnect();
-        audioContext?.close();
-        
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        updateStatus('Connected', 'connected');
-        audioLevelElement.textContent = '0%';
-    }
-
-    // --- Event Listeners ---
-    startBtn.addEventListener('click', startRecording);
-    stopBtn.addEventListener('click', stopRecording);
-    clearBtn.addEventListener('click', () => {
-        conversationDiv.innerHTML = '';
-        addMessage('Chat cleared.', 'system');
-    });
-
-    // --- Initial Kick-off ---
-    addMessage('Welcome! Attempting to connect to the server...', 'system');
-    connectWebSocket();
-});
+</html>
