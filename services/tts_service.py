@@ -21,55 +21,76 @@ class KyutaiTTSService:
         try:
             logger.info("Initializing Kyutai TTS Service...")
             
-            # Find model directory
-            model_dir = models_dir / "tts"
+            # Find the actual snapshot directory
+            model_dir = models_dir / "tts" / "models--kyutai--tts-1.6b-en_fr" / "snapshots"
             tts_path = None
             
-            for path in model_dir.rglob("*"):
-                if "snapshots" in str(path) and path.is_dir():
-                    tts_path = path
-                    break
+            # Find the actual snapshot directory (it will be a hash)
+            if model_dir.exists():
+                snapshot_dirs = [d for d in model_dir.iterdir() if d.is_dir()]
+                if snapshot_dirs:
+                    tts_path = snapshot_dirs[0]  # Use the first (and likely only) snapshot
+                    logger.info(f"Found TTS snapshot directory: {tts_path}")
             
             if not tts_path:
                 logger.warning("TTS model directory not found, using fallback")
                 self.is_initialized = True
                 return True
             
-            # Load tokenizer with correct filename
-            try:
-                tokenizer_file = tts_path / "tokenizer_spm_8k_en_fr_audio.model"
-                if tokenizer_file.exists():
-                    import sentencepiece as spm
-                    self.tokenizer = spm.SentencePieceProcessor()
-                    self.tokenizer.load(str(tokenizer_file))
-                    logger.info("✅ TTS tokenizer loaded")
-                else:
-                    logger.warning(f"TTS tokenizer not found at {tokenizer_file}")
-            except Exception as e:
-                logger.warning(f"Failed to load TTS tokenizer: {e}")
+            # Load tokenizer - try multiple possible names
+            tokenizer_loaded = False
+            tokenizer_files = [
+                "tokenizer_spm_8k_en_fr_audio.model",
+                "tokenizer_en_fr_audio_8000.model",
+                "tokenizer.model"
+            ]
             
-            # Load model using safetensors with correct filename
-            try:
-                model_file = tts_path / "dsm_tts_1e68beda@240.safetensors"
-                if model_file.exists():
-                    from safetensors.torch import load_file
-                    
-                    # Load model weights
-                    model_weights = load_file(str(model_file))
-                    logger.info(f"✅ Loaded TTS model weights with {len(model_weights)} parameters")
-                    
-                    # Create model wrapper
-                    self.model = torch.nn.Module()
-                    self.model.eval()
-                    self.model.to(self.device)
-                    
-                    self.is_initialized = True
-                    return True
-                else:
-                    logger.warning(f"TTS model file not found at {model_file}")
-                    
-            except Exception as e:
-                logger.warning(f"TTS model loading failed: {e}")
+            for tokenizer_file in tokenizer_files:
+                try:
+                    tokenizer_path = tts_path / tokenizer_file
+                    if tokenizer_path.exists():
+                        import sentencepiece as spm
+                        self.tokenizer = spm.SentencePieceProcessor()
+                        self.tokenizer.load(str(tokenizer_path))
+                        logger.info(f"✅ TTS tokenizer loaded from {tokenizer_file}")
+                        tokenizer_loaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to load tokenizer {tokenizer_file}: {e}")
+            
+            if not tokenizer_loaded:
+                logger.warning("No TTS tokenizer found")
+            
+            # Load model using safetensors - try multiple possible names
+            model_loaded = False
+            model_files = [
+                "dsm_tts_1e68beda@240.safetensors",
+                "model.safetensors",
+                "pytorch_model.bin"
+            ]
+            
+            for model_file in model_files:
+                try:
+                    model_path = tts_path / model_file
+                    if model_path.exists():
+                        from safetensors.torch import load_file
+                        
+                        # Load model weights
+                        model_weights = load_file(str(model_path))
+                        logger.info(f"✅ Loaded TTS model weights with {len(model_weights)} parameters from {model_file}")
+                        
+                        # Create model wrapper
+                        self.model = torch.nn.Module()
+                        self.model.eval()
+                        self.model.to(self.device)
+                        
+                        model_loaded = True
+                        break
+                except Exception as e:
+                    logger.warning(f"Failed to load model {model_file}: {e}")
+            
+            if not model_loaded:
+                logger.warning("No TTS model file found")
             
             self.is_initialized = True
             return True
@@ -190,7 +211,6 @@ class KyutaiTTSService:
         audio += noise
         
         # Multi-band compression for professional sound
-        # Simple implementation
         threshold = 0.6
         ratio = 3.0
         
