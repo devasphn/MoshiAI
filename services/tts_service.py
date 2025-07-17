@@ -41,7 +41,7 @@ class KyutaiTTSService:
                                 tokenizer_file = snapshot_dir / "tokenizer_spm_8k_en_fr_audio.model"
                                 tokenizer = None
                                 if tokenizer_file.exists():
-                                    tokenizer = smp.SentencePieceProcessor()
+                                    tokenizer = spm.SentencePieceProcessor()
                                     tokenizer.load(str(tokenizer_file))
                                 
                                 return mimi, tokenizer, snapshot_dir
