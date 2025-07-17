@@ -31,6 +31,11 @@ def download_kyutai_models():
             "repo_id": "kyutai/moshika-pytorch-bf16",
             "cache_dir": models_dir / "llm",
             "name": "Moshi LLM"
+        },
+        {
+            "repo_id": "kyutai/mimi",
+            "cache_dir": models_dir / "mimi",
+            "name": "Mimi Audio Codec"
         }
     ]
     
