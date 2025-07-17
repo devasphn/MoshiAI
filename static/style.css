@@ -24,23 +24,14 @@ header {
 }
 
 header h1 {
-    font-size: 2.5em;
+    font-size: 2.5rem;
     margin-bottom: 10px;
     text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
 }
 
 header p {
-    font-size: 1.2em;
+    font-size: 1.2rem;
     opacity: 0.9;
-}
-
-.version-info {
-    font-size: 0.9em;
-    background: rgba(255,255,255,0.2);
-    padding: 5px 15px;
-    border-radius: 15px;
-    display: inline-block;
-    margin-top: 10px;
 }
 
 .status-panel {
@@ -50,41 +41,54 @@ header p {
     margin-bottom: 20px;
     display: flex;
     justify-content: space-around;
+    align-items: center;
     box-shadow: 0 8px 32px rgba(0,0,0,0.1);
 }
 
 .status-item {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 10px;
+    gap: 5px;
 }
 
 .status-label {
     font-weight: 600;
     color: #666;
+    font-size: 0.9rem;
 }
 
-.status-value {
-    padding: 5px 15px;
-    background: #e8f5e8;
+.status {
+    padding: 8px 16px;
     border-radius: 20px;
     font-weight: 500;
-    color: #2d5a2d;
+    font-size: 0.9rem;
 }
 
-.status-value.connected {
+.status.connected {
     background: #d4edda;
     color: #155724;
 }
 
-.status-value.disconnected {
+.status.connecting {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status.recording {
     background: #f8d7da;
+    color: #721c24;
+    animation: pulse 1s infinite;
+}
+
+.status.error {
+    background: #f5c6cb;
     color: #721c24;
 }
 
-.status-value.error {
-    background: #f5c6cb;
-    color: #721c24;
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
 }
 
 .chat-container {
@@ -92,54 +96,47 @@ header p {
     border-radius: 15px;
     padding: 20px;
     margin-bottom: 20px;
-    min-height: 400px;
-    max-height: 500px;
+    height: 400px;
     overflow-y: auto;
     box-shadow: 0 8px 32px rgba(0,0,0,0.1);
 }
 
-.conversation {
-    display: flex;
-    flex-direction: column;
-    gap: 15px;
-}
-
 .message {
+    margin-bottom: 15px;
     max-width: 70%;
-    padding: 15px 20px;
-    border-radius: 20px;
-    position: relative;
+    padding: 12px 16px;
+    border-radius: 18px;
     animation: slideIn 0.3s ease;
 }
 
 .message.user {
     background: #007bff;
     color: white;
-    align-self: flex-end;
-    border-bottom-right-radius: 5px;
+    margin-left: auto;
+    border-bottom-right-radius: 4px;
 }
 
 .message.assistant {
     background: #f8f9fa;
     color: #333;
-    align-self: flex-start;
-    border-bottom-left-radius: 5px;
     border-left: 4px solid #007bff;
+    border-bottom-left-radius: 4px;
 }
 
 .message.system {
-    background: #fff3cd;
-    color: #856404;
-    align-self: center;
-    border-left: 4px solid #ffc107;
+    background: #e9ecef;
+    color: #495057;
+    margin: 0 auto;
+    text-align: center;
+    font-style: italic;
 }
 
 .message-content {
-    line-height: 1.6;
+    line-height: 1.5;
 }
 
-.message-time {
-    font-size: 0.8em;
+.message-timing {
+    font-size: 0.8rem;
     opacity: 0.7;
     margin-top: 5px;
 }
@@ -147,12 +144,10 @@ header p {
 .controls {
     background: rgba(255,255,255,0.95);
     border-radius: 15px;
-    padding: 25px;
-    margin-bottom: 20px;
+    padding: 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    flex-wrap: wrap;
     gap: 20px;
     box-shadow: 0 8px 32px rgba(0,0,0,0.1);
 }
@@ -162,23 +157,22 @@ header p {
     gap: 15px;
 }
 
-.advanced-controls {
-    display: flex;
-    gap: 15px;
-}
-
 .btn {
     padding: 12px 24px;
     border: none;
     border-radius: 25px;
-    font-size: 1em;
+    font-size: 1rem;
     font-weight: 600;
     cursor: pointer;
     transition: all 0.3s ease;
-    text-decoration: none;
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
 }
 
 .btn-primary {
@@ -211,98 +205,24 @@ header p {
     transform: translateY(-2px);
 }
 
-.btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
-}
-
-.emotion-controls {
+.metrics {
     display: flex;
+    gap: 20px;
     align-items: center;
-    gap: 10px;
-}
-
-.emotion-controls label {
-    font-weight: 600;
+    font-size: 0.9rem;
     color: #666;
 }
 
-.emotion-controls select {
-    padding: 8px 15px;
-    border: 2px solid #ddd;
-    border-radius: 25px;
-    font-size: 1em;
-    background: white;
-    cursor: pointer;
-    transition: border-color 0.3s ease;
-}
-
-.emotion-controls select:focus {
-    outline: none;
-    border-color: #007bff;
-}
-
-.audio-visualizer {
-    background: rgba(255,255,255,0.95);
-    border-radius: 15px;
-    padding: 20px;
-    text-align: center;
-    margin-bottom: 20px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-}
-
-.visualizer-info {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 10px;
-    font-size: 0.9em;
-    color: #666;
-}
-
-#audio-canvas {
-    border-radius: 10px;
-    background: #f8f9fa;
-    max-width: 100%;
-    height: auto;
-    border: 2px solid #e9ecef;
-}
-
-.performance-panel {
-    background: rgba(255,255,255,0.95);
-    border-radius: 15px;
-    padding: 20px;
-    margin-bottom: 20px;
-    display: flex;
-    justify-content: space-around;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-}
-
-.performance-item {
+.metric {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 5px;
 }
 
-.performance-label {
+.metric-value {
     font-weight: 600;
-    color: #666;
-    font-size: 0.9em;
-}
-
-.performance-value {
-    font-size: 1.2em;
-    font-weight: 700;
     color: #007bff;
-}
-
-footer {
-    text-align: center;
-    color: white;
-    margin-top: 30px;
-    opacity: 0.8;
 }
 
 @keyframes slideIn {
@@ -316,16 +236,6 @@ footer {
     }
 }
 
-.recording {
-    animation: pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-    0%, 100% { transform: scale(1); }
-    50% { transform: scale(1.05); }
-}
-
-/* Responsive design */
 @media (max-width: 768px) {
     .container {
         padding: 10px;
@@ -333,32 +243,19 @@ footer {
     
     .controls {
         flex-direction: column;
-        align-items: stretch;
+        gap: 15px;
     }
     
-    .voice-controls {
-        justify-content: center;
-    }
-    
-    .emotion-controls {
-        justify-content: center;
-    }
-    
-    .advanced-controls {
+    .metrics {
         justify-content: center;
     }
     
     .status-panel {
         flex-direction: column;
-        gap: 10px;
-    }
-    
-    .performance-panel {
-        flex-direction: column;
-        gap: 10px;
+        gap: 15px;
     }
     
     .message {
-        max-width: 85%;
+        max-width: 90%;
     }
 }
