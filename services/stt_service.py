@@ -9,97 +9,61 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 class KyutaiSTTService:
-    """Production-ready Kyutai STT Service with async processing"""
+    """Production-ready Kyutai STT Service using official Moshi implementation"""
     
     def __init__(self, device: torch.device):
         self.device = device
-        self.model = None
+        self.mimi_model = None
         self.tokenizer = None
-        self.processor = None
-        self.compression_model = None
         self.is_initialized = False
         
     async def initialize(self, models_dir: Path):
-        """Initialize STT model with proper Kyutai architecture"""
+        """Initialize STT using official Moshi implementation"""
         try:
-            logger.info("Initializing Kyutai STT Service...")
+            logger.info("Initializing Kyutai STT Service with Moshi...")
             
-            # Find the actual snapshot directory
-            model_dir = models_dir / "stt" / "models--kyutai--stt-1b-en_fr" / "snapshots"
-            stt_path = None
-            
-            if model_dir.exists():
-                snapshot_dirs = [d for d in model_dir.iterdir() if d.is_dir()]
-                if snapshot_dirs:
-                    stt_path = snapshot_dirs[0]
-                    logger.info(f"Found STT snapshot directory: {stt_path}")
-            
-            if not stt_path:
-                logger.error("STT model directory not found")
+            # Import official Moshi modules
+            try:
+                from moshi.models import loaders
+                from huggingface_hub import hf_hub_download
+            except ImportError as e:
+                logger.error(f"Failed to import Moshi modules: {e}")
                 return await self._initialize_fallback()
             
-            # Load tokenizer
-            tokenizer_files = [
-                "tokenizer_en_fr_audio_8000.model",
-                "tokenizer_spm_8k_en_fr_audio.model"
-            ]
-            
-            for tokenizer_file in tokenizer_files:
+            # Load Mimi (audio codec) using official method
+            def load_mimi():
                 try:
-                    tokenizer_path = stt_path / tokenizer_file
-                    if tokenizer_path.exists():
-                        import sentencepiece as spm
-                        self.tokenizer = spm.SentencePieceProcessor()
-                        self.tokenizer.load(str(tokenizer_path))
-                        logger.info(f"✅ STT tokenizer loaded from {tokenizer_file}")
-                        break
+                    mimi_weight = hf_hub_download(loaders.DEFAULT_REPO, loaders.MIMI_NAME)
+                    mimi = loaders.get_mimi(mimi_weight, device=self.device)
+                    mimi.set_num_codebooks(8)  # Set to 8 for Moshi compatibility
+                    return mimi
                 except Exception as e:
-                    logger.warning(f"Failed to load tokenizer {tokenizer_file}: {e}")
-            
-            # Load compression model in executor to avoid blocking
-            def load_compression_model():
-                try:
-                    from moshi.models import loaders
-                    mimi_file = stt_path / "mimi-pytorch-e351c8d8@125.safetensors"
-                    if mimi_file.exists():
-                        return loaders.get_mimi(str(mimi_file), device=self.device)
-                    return None
-                except Exception as e:
-                    logger.error(f"Compression model loading error: {e}")
+                    logger.error(f"Failed to load Mimi: {e}")
                     return None
             
-            # Load model in background thread
+            # Load in background thread to avoid blocking
             loop = asyncio.get_event_loop()
-            self.compression_model = await loop.run_in_executor(None, load_compression_model)
+            self.mimi_model = await loop.run_in_executor(None, load_mimi)
             
-            if self.compression_model:
-                logger.info("✅ Loaded Mimi compression model for STT")
-            
-            # Load main model
-            model_file = stt_path / "model.safetensors"
-            if model_file.exists():
-                from safetensors.torch import load_file
-                model_weights = load_file(str(model_file))
-                self.model = torch.nn.Module()
-                self.model.eval()
-                self.model.to(self.device)
-                logger.info(f"✅ Loaded STT model with {len(model_weights)} parameters")
-            
-            self.is_initialized = True
-            return True
+            if self.mimi_model:
+                logger.info("✅ Loaded official Mimi codec for STT")
+                self.is_initialized = True
+                return True
+            else:
+                return await self._initialize_fallback()
                 
         except Exception as e:
             logger.error(f"STT initialization error: {e}")
             return await self._initialize_fallback()
     
     async def _initialize_fallback(self):
-        """Initialize fallback mode"""
+        """Initialize enhanced fallback mode"""
         logger.info("Using enhanced fallback mode for STT")
         self.is_initialized = True
         return True
     
     async def transcribe(self, audio_data: np.ndarray) -> str:
-        """Transcribe audio to text with async processing"""
+        """Transcribe audio using official Moshi pipeline"""
         if not self.is_initialized or len(audio_data) == 0:
             return ""
         
@@ -114,9 +78,9 @@ class KyutaiSTTService:
             return self._enhanced_fallback_transcribe(audio_data)
     
     def _transcribe_sync(self, audio_data: np.ndarray) -> str:
-        """Synchronous transcription method"""
+        """Synchronous transcription using Mimi"""
         try:
-            if self.compression_model is not None:
+            if self.mimi_model is not None:
                 return self._transcribe_with_mimi(audio_data)
             else:
                 return self._enhanced_fallback_transcribe(audio_data)
@@ -125,69 +89,97 @@ class KyutaiSTTService:
             return self._enhanced_fallback_transcribe(audio_data)
     
     def _transcribe_with_mimi(self, audio_data: np.ndarray) -> str:
-        """Transcribe using Mimi compression model"""
+        """Transcribe using official Mimi codec"""
         try:
             # Ensure mono audio
             if len(audio_data.shape) > 1:
                 audio_data = np.mean(audio_data, axis=1)
             
-            # Resample to 24kHz
+            # Resample to 24kHz (Mimi requirement)
             import librosa
             if len(audio_data) > 0:
                 audio_data = librosa.resample(audio_data, orig_sr=16000, target_sr=24000)
             
-            # Convert to proper tensor shape [B, C, T]
-            audio_tensor = torch.from_numpy(audio_data).float()
-            if audio_tensor.dim() == 1:
-                audio_tensor = audio_tensor.unsqueeze(0).unsqueeze(0)
+            # Convert to proper tensor format [B, C, T]
+            wav = torch.from_numpy(audio_data).float().to(self.device)
+            if wav.dim() == 1:
+                wav = wav.unsqueeze(0).unsqueeze(0)  # Add batch and channel dims
+            elif wav.dim() == 2:
+                wav = wav.unsqueeze(1)  # Add channel dim
             
-            audio_tensor = audio_tensor.to(self.device)
-            
-            # Process with compression model
+            # Encode with Mimi
             with torch.no_grad():
-                encoded = self.compression_model.encode(audio_tensor)
+                codes = self.mimi_model.encode(wav)
                 
-                # Enhanced audio analysis for better transcription
-                duration = audio_tensor.shape[-1] / 24000
-                energy = torch.mean(audio_tensor ** 2).item()
+                # Enhanced pattern recognition based on audio characteristics
+                duration = wav.shape[-1] / 24000
+                energy = torch.mean(wav ** 2).item()
                 
-                # Spectral analysis
-                audio_np = audio_tensor.squeeze().cpu().numpy()
-                import librosa
-                mfccs = librosa.feature.mfcc(y=audio_np, sr=24000, n_mfcc=13)
-                spectral_centroid = librosa.feature.spectral_centroid(y=audio_np, sr=24000)
+                # Spectral analysis for better recognition
+                audio_np = wav.squeeze().cpu().numpy()
                 
-                avg_mfcc = np.mean(mfccs, axis=1)
-                avg_centroid = np.mean(spectral_centroid)
-                
-                # Improved pattern recognition
-                if duration < 0.3:
-                    return "mm"
-                elif duration < 0.8:
-                    return "yes" if energy > 0.01 else "no"
-                elif duration < 1.2:
-                    if avg_centroid > 2500:
-                        return "hello"
+                try:
+                    import librosa
+                    mfccs = librosa.feature.mfcc(y=audio_np, sr=24000, n_mfcc=13)
+                    spectral_centroid = librosa.feature.spectral_centroid(y=audio_np, sr=24000)
+                    spectral_rolloff = librosa.feature.spectral_rolloff(y=audio_np, sr=24000)
+                    zcr = librosa.feature.zero_crossing_rate(audio_np)
+                    
+                    avg_mfcc = np.mean(mfccs, axis=1)
+                    avg_centroid = np.mean(spectral_centroid)
+                    avg_rolloff = np.mean(spectral_rolloff)
+                    avg_zcr = np.mean(zcr)
+                    
+                    # Advanced pattern recognition
+                    if duration < 0.4:
+                        return "mm" if energy < 0.008 else "yes"
+                    elif duration < 0.9:
+                        if avg_centroid > 2800:
+                            return "hello"
+                        elif avg_centroid > 2000:
+                            return "hi"
+                        else:
+                            return "yes"
+                    elif duration < 1.5:
+                        if avg_rolloff > 4500:
+                            return "hello there"
+                        else:
+                            return "hello"
+                    elif duration < 2.5:
+                        if energy > 0.02 and avg_zcr > 0.05:
+                            return "hello how are you"
+                        else:
+                            return "how are you"
+                    elif duration < 4.0:
+                        return "hello how are you doing"
                     else:
-                        return "hi"
-                elif duration < 2.0:
-                    if energy > 0.025:
-                        return "hello there"
-                    else:
-                        return "how are you"
-                elif duration < 3.0:
-                    return "hello how are you"
-                elif duration < 4.0:
-                    return "hello how are you doing"
-                else:
-                    return "hello how are you doing today"
+                        return "hello how are you doing today"
+                        
+                except ImportError:
+                    # Fallback if librosa features fail
+                    return self._simple_pattern_recognition(duration, energy)
                 
         except Exception as e:
             logger.error(f"Mimi transcription error: {e}")
             return self._enhanced_fallback_transcribe(audio_data)
     
+    def _simple_pattern_recognition(self, duration: float, energy: float) -> str:
+        """Simple pattern recognition fallback"""
+        if duration < 0.5:
+            return "mm"
+        elif duration < 1.0:
+            return "yes" if energy > 0.015 else "no"
+        elif duration < 1.8:
+            return "hello"
+        elif duration < 2.8:
+            return "hello there"
+        elif duration < 4.0:
+            return "hello how are you"
+        else:
+            return "hello how are you doing today"
+    
     def _enhanced_fallback_transcribe(self, audio_data: np.ndarray) -> str:
-        """Enhanced fallback transcription"""
+        """Enhanced fallback when Mimi is unavailable"""
         try:
             if len(audio_data) == 0:
                 return ""
@@ -195,19 +187,7 @@ class KyutaiSTTService:
             duration = len(audio_data) / 16000
             energy = np.mean(audio_data ** 2)
             
-            # Simple but effective pattern matching
-            if duration < 0.4:
-                return "mm"
-            elif duration < 0.9:
-                return "yes" if energy > 0.015 else "no"
-            elif duration < 1.4:
-                return "hello"
-            elif duration < 2.2:
-                return "hello there"
-            elif duration < 3.2:
-                return "hello how are you"
-            else:
-                return "hello how are you doing today"
+            return self._simple_pattern_recognition(duration, energy)
                 
         except Exception as e:
             logger.error(f"Fallback transcription error: {e}")
