@@ -1,185 +1,226 @@
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('🚀 Initializing Enhanced Unmute Voice Assistant...');
-
-    const startBtn = document.getElementById('start-btn');
-    const stopBtn = document.getElementById('stop-btn');
-    const statusElement = document.getElementById('connection-status');
-    const conversationDiv = document.getElementById('conversation');
-    const responseTimeElement = document.getElementById('response-time');
-    const audioLevelElement = document.getElementById('audio-level');
-
-    let ws;
-    let audioContext;
-    let scriptProcessor;
-    let mediaStream;
-    let isRecording = false;
-
-    function updateStatus(status, className) {
-        statusElement.textContent = status;
-        statusElement.className = `status-value ${className}`;
-        console.log(`📊 Status updated: ${status}`);
+class MoshiAIClient {
+    constructor() {
+        this.ws = null;
+        this.audioContext = null;
+        this.mediaStream = null;
+        this.scriptProcessor = null;
+        this.isRecording = false;
+        this.isConnected = false;
+        
+        this.initializeElements();
+        this.connectWebSocket();
     }
-
-    function addMessage(text, sender) {
+    
+    initializeElements() {
+        this.startBtn = document.getElementById('start-btn');
+        this.stopBtn = document.getElementById('stop-btn');
+        this.clearBtn = document.getElementById('clear-btn');
+        this.statusElement = document.getElementById('status');
+        this.conversationDiv = document.getElementById('conversation');
+        this.audioLevelElement = document.getElementById('audio-level');
+        this.responseTimeElement = document.getElementById('response-time');
+        
+        // Event listeners
+        this.startBtn.addEventListener('click', () => this.startRecording());
+        this.stopBtn.addEventListener('click', () => this.stopRecording());
+        this.clearBtn.addEventListener('click', () => this.clearConversation());
+    }
+    
+    updateStatus(message, type = 'info') {
+        this.statusElement.textContent = message;
+        this.statusElement.className = `status ${type}`;
+        console.log(`[${type.toUpperCase()}] ${message}`);
+    }
+    
+    addMessage(text, sender, timing = null) {
         const messageDiv = document.createElement('div');
         messageDiv.className = `message ${sender}`;
+        
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
         contentDiv.textContent = text;
         messageDiv.appendChild(contentDiv);
-        conversationDiv.appendChild(messageDiv);
-        conversationDiv.scrollTop = conversationDiv.scrollHeight;
-    }
-
-    function connectWebSocket() {
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
         
-        updateStatus('Connecting...', 'disconnected');
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
-            updateStatus('Connected', 'connected');
-            startBtn.disabled = false;
+        if (timing) {
+            const timingDiv = document.createElement('div');
+            timingDiv.className = 'message-timing';
+            timingDiv.textContent = `${timing.total.toFixed(2)}s total`;
+            messageDiv.appendChild(timingDiv);
+        }
+        
+        this.conversationDiv.appendChild(messageDiv);
+        this.conversationDiv.scrollTop = this.conversationDiv.scrollHeight;
+    }
+    
+    connectWebSocket() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws`;
+        
+        this.updateStatus('Connecting...', 'connecting');
+        
+        this.ws = new WebSocket(wsUrl);
+        
+        this.ws.onopen = () => {
+            this.isConnected = true;
+            this.updateStatus('Connected', 'connected');
+            this.startBtn.disabled = false;
+            this.addMessage('Connected to MoshiAI. You can start talking!', 'system');
         };
-
-        ws.onmessage = (event) => {
+        
+        this.ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            handleWebSocketMessage(data);
+            this.handleMessage(data);
         };
-
-        ws.onclose = () => {
-            updateStatus('Disconnected', 'disconnected');
-            isRecording = false;
-            startBtn.disabled = true;
-            stopBtn.disabled = true;
-            setTimeout(connectWebSocket, 3000); // Attempt to reconnect
+        
+        this.ws.onclose = () => {
+            this.isConnected = false;
+            this.updateStatus('Disconnected', 'error');
+            this.startBtn.disabled = true;
+            this.stopBtn.disabled = true;
+            
+            // Reconnect after delay
+            setTimeout(() => this.connectWebSocket(), 3000);
         };
-
-        ws.onerror = (error) => {
-            console.error('❌ WebSocket Error:', error);
-            updateStatus('Connection Error', 'error');
+        
+        this.ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            this.updateStatus('Connection error', 'error');
         };
     }
-
-    function handleWebSocketMessage(data) {
-        console.log('📨 Received message:', data.type);
-        switch (data.type) {
-            case 'transcription':
-                addMessage(data.text, 'user');
-                break;
-            case 'response':
-                addMessage(data.text, 'assistant');
-                if (data.response_time) {
-                    responseTimeElement.textContent = `${data.response_time.toFixed(2)}s`;
-                }
-                if (data.audio && data.audio.length > 0) {
-                    playAudio(data.audio);
-                }
-                break;
-            case 'error':
-                addMessage(`Server Error: ${data.message}`, 'system');
-                break;
-            default:
-                console.warn('⚠️ Unknown message type:', data.type);
+    
+    handleMessage(data) {
+        if (data.error) {
+            this.addMessage(`Error: ${data.error}`, 'system');
+            return;
+        }
+        
+        if (data.transcription) {
+            this.addMessage(data.transcription, 'user');
+        }
+        
+        if (data.response_text) {
+            this.addMessage(data.response_text, 'assistant', data.timing);
+            
+            if (data.timing) {
+                this.responseTimeElement.textContent = `${data.timing.total.toFixed(2)}s`;
+            }
+        }
+        
+        if (data.response_audio && data.response_audio.length > 0) {
+            this.playAudio(data.response_audio);
         }
     }
     
-    async function playAudio(audioArray) {
-        if (!audioContext) {
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
-        }
-        if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-        }
-        
-        const audioBuffer = audioContext.createBuffer(1, audioArray.length, 24000);
-        audioBuffer.getChannelData(0).set(audioArray);
-
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-        source.start();
-    }
-
-    async function startRecording() {
-        if (isRecording) return;
+    async playAudio(audioArray) {
         try {
-            updateStatus('Recording...', 'connected');
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-
-            mediaStream = await navigator.mediaDevices.getUserMedia({
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            if (this.audioContext.state === 'suspended') {
+                await this.audioContext.resume();
+            }
+            
+            const audioBuffer = this.audioContext.createBuffer(1, audioArray.length, 24000);
+            audioBuffer.getChannelData(0).set(audioArray);
+            
+            const source = this.audioContext.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(this.audioContext.destination);
+            source.start();
+            
+        } catch (error) {
+            console.error('Audio playback error:', error);
+        }
+    }
+    
+    async startRecording() {
+        if (this.isRecording || !this.isConnected) return;
+        
+        try {
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                sampleRate: 16000
+            });
+            
+            this.mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     sampleRate: 16000,
                     channelCount: 1,
                     echoCancellation: true,
-                    noiseSuppression: true
+                    noiseSuppression: true,
+                    autoGainControl: true
                 }
             });
-
-            const source = audioContext.createMediaStreamSource(mediaStream);
-            scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-
-            scriptProcessor.onaudioprocess = (event) => {
-                if (!isRecording) return;
+            
+            const source = this.audioContext.createMediaStreamSource(this.mediaStream);
+            this.scriptProcessor = this.audioContext.createScriptProcessor(4096, 1, 1);
+            
+            this.scriptProcessor.onaudioprocess = (event) => {
+                if (!this.isRecording) return;
+                
                 const inputData = event.inputBuffer.getChannelData(0);
                 
                 // Calculate audio level
-                const level = Math.sqrt(inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length);
-                audioLevelElement.textContent = `Level: ${Math.round(level * 100)}%`;
-
-                // Send audio data via WebSocket
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: 'audio', audio: Array.from(inputData) }));
+                const level = Math.sqrt(
+                    inputData.reduce((sum, val) => sum + val * val, 0) / inputData.length
+                );
+                this.audioLevelElement.textContent = `${Math.round(level * 100)}%`;
+                
+                // Send audio data
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify({
+                        type: 'audio',
+                        audio: Array.from(inputData)
+                    }));
                 }
             };
             
-            source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContext.destination);
-
-            isRecording = true;
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-            startBtn.classList.add('recording');
-
+            source.connect(this.scriptProcessor);
+            this.scriptProcessor.connect(this.audioContext.destination);
+            
+            this.isRecording = true;
+            this.startBtn.disabled = true;
+            this.stopBtn.disabled = false;
+            this.updateStatus('Recording...', 'recording');
+            
         } catch (error) {
-            console.error('❌ Could not start recording:', error);
-            addMessage(`Error: ${error.message}. Please allow microphone access.`, 'system');
-            updateStatus('Mic Error', 'error');
+            console.error('Recording error:', error);
+            this.addMessage(`Microphone error: ${error.message}`, 'system');
+            this.updateStatus('Microphone error', 'error');
         }
     }
-
-    function stopRecording() {
-        if (!isRecording) return;
+    
+    stopRecording() {
+        if (!this.isRecording) return;
         
-        isRecording = false;
-        if (mediaStream) {
-            mediaStream.getTracks().forEach(track => track.stop());
-        }
-        if (scriptProcessor) {
-            scriptProcessor.disconnect();
-            scriptProcessor = null;
-        }
-        if (audioContext) {
-            audioContext.close();
-            audioContext = null;
+        this.isRecording = false;
+        
+        if (this.mediaStream) {
+            this.mediaStream.getTracks().forEach(track => track.stop());
         }
         
-        startBtn.disabled = false;
-        stopBtn.disabled = true;
-        startBtn.classList.remove('recording');
-        updateStatus('Connected', 'connected');
-        audioLevelElement.textContent = 'Level: 0%';
+        if (this.scriptProcessor) {
+            this.scriptProcessor.disconnect();
+        }
+        
+        if (this.audioContext) {
+            this.audioContext.close();
+        }
+        
+        this.startBtn.disabled = false;
+        this.stopBtn.disabled = true;
+        this.updateStatus('Connected', 'connected');
+        this.audioLevelElement.textContent = '0%';
     }
+    
+    clearConversation() {
+        this.conversationDiv.innerHTML = '';
+        this.responseTimeElement.textContent = '-';
+        this.addMessage('Conversation cleared', 'system');
+    }
+}
 
-    // Event Listeners
-    startBtn.addEventListener('click', startRecording);
-    stopBtn.addEventListener('click', stopRecording);
-    document.getElementById('clear-btn').addEventListener('click', () => {
-        conversationDiv.innerHTML = '';
-        responseTimeElement.textContent = '-';
-    });
-
-    // Initial setup
-    connectWebSocket();
+// Initialize when DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+    new MoshiAIClient();
 });
